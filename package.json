@@ -1,7 +1,7 @@
 {
   "name": "nova-md",
-  "version": "1.0",
-  "description": "NOVA-MD Premium - Bot WhatsApp Multi-device avec sessions persistantes",
+  "version": "2.0",
+  "description": "NOVA-MD Premium - Bot WhatsApp avec sessions persistantes",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -20,7 +20,7 @@
     "nova-md",
     "premium"
   ],
-  "author": "Nova Team",
+  "author": "NOSTRA",
   "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.4.0",

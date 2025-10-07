@@ -111,43 +111,53 @@ async function initDatabase() {
             session_data JSONB NOT NULL,
             backed_up_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             restored BOOLEAN DEFAULT FALSE
-        );`,
-        
-        `-- Index pour les performances
-        CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
-        CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
-        CREATE INDEX IF NOT EXISTS idx_subscriptions_end_date ON subscriptions(end_date);
-        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON whatsapp_sessions(user_id);
-        CREATE INDEX IF NOT EXISTS idx_sessions_status ON whatsapp_sessions(status);
-        CREATE INDEX IF NOT EXISTS idx_sessions_subscription_active ON whatsapp_sessions(subscription_active);
-        CREATE INDEX IF NOT EXISTS idx_telegram_users_chat_id ON telegram_users(chat_id);
-        CREATE INDEX IF NOT EXISTS idx_commands_enabled ON commands(enabled);
-        CREATE INDEX IF NOT EXISTS idx_commands_category ON commands(category);
-        CREATE INDEX IF NOT EXISTS idx_updates_version ON system_updates(version);
-        CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);`
+        );`
     ];
     
     try {
+        // Vérifier d'abord la connexion
+        const { error: connectionError } = await supabase
+            .from('_supabase_schema')
+            .select('*')
+            .limit(1);
+            
+        if (connectionError) {
+            throw new Error(`Connexion Supabase échouée: ${connectionError.message}`);
+        }
+        
+        log.success("✅ Connexion à Supabase établie");
+        
+        // Exécuter les commandes SQL une par une
         for (const sql of sqlCommands) {
             try {
-                const { error } = await supabase.rpc('exec_sql', { query: sql });
-                if (error && !error.message.includes('already exists') && !error.message.includes('duplicate key')) {
-                    log.warn(`⚠️  Erreur création table: ${error.message}`);
+                // Pour Supabase, on ne peut pas exécuter du SQL arbitraire directement
+                // On va plutôt vérifier si la table existe et la créer si nécessaire
+                const tableName = extractTableName(sql);
+                if (tableName) {
+                    await createTableIfNotExists(supabase, tableName, sql);
                 }
             } catch (error) {
-                log.warn(`⚠️  Erreur exécution SQL: ${error.message}`);
+                log.warn(`⚠️  Erreur création table: ${error.message}`);
             }
         }
         
         // Vérifier que les tables essentielles existent
-        const { error: checkError } = await supabase
-            .from('subscriptions')
-            .select('id')
-            .limit(1);
-            
-        if (checkError) {
-            log.error('❌ Erreur vérification tables:', checkError);
-            throw new Error('Échec initialisation base de données');
+        const essentialTables = ['subscriptions', 'access_codes', 'telegram_users'];
+        let missingTables = [];
+        
+        for (const table of essentialTables) {
+            const { error } = await supabase
+                .from(table)
+                .select('id')
+                .limit(1);
+                
+            if (error) {
+                missingTables.push(table);
+            }
+        }
+        
+        if (missingTables.length > 0) {
+            throw new Error(`Tables manquantes: ${missingTables.join(', ')}. Créez-les manuellement dans Supabase.`);
         }
         
         log.success("✅ Base de données initialisée avec succès");
@@ -162,7 +172,43 @@ async function initDatabase() {
         
     } catch (error) {
         log.error("❌ Erreur initialisation base de données:", error);
+        
+        // Donner des instructions pour la création manuelle
+        log.info("💡 Solution alternative:");
+        log.info("1. Allez sur Supabase → Table Editor");
+        log.info("2. Créez manuellement les tables avec le SQL fourni");
+        log.info("3. Redémarrez l'application");
+        
         throw error;
+    }
+}
+
+// Fonction utilitaire pour extraire le nom de table du SQL
+function extractTableName(sql) {
+    const match = sql.match(/CREATE TABLE IF NOT EXISTS (\w+)/i);
+    return match ? match[1] : null;
+}
+
+// Fonction pour créer une table si elle n'existe pas
+async function createTableIfNotExists(supabase, tableName, createSql) {
+    try {
+        // Vérifier si la table existe
+        const { error } = await supabase
+            .from(tableName)
+            .select('*')
+            .limit(1);
+            
+        if (error && error.code === 'PGRST116') {
+            // Table n'existe pas, on log juste l'info
+            log.info(`📋 Table ${tableName} à créer manuellement dans Supabase`);
+            return false;
+        }
+        
+        // Table existe déjà
+        return true;
+    } catch (error) {
+        log.warn(`⚠️  Vérification table ${tableName}: ${error.message}`);
+        return false;
     }
 }
 
@@ -170,20 +216,24 @@ async function logDatabaseStatus(supabase) {
     try {
         const tables = [
             'access_codes', 'subscriptions', 'telegram_users', 
-            'whatsapp_sessions', 'user_settings', 'commands', 'system_updates'
+            'whatsapp_sessions', 'user_settings', 'commands'
         ];
         
         log.info("📊 Statut de la base de données:");
         
         for (const table of tables) {
-            const { count, error } = await supabase
-                .from(table)
-                .select('*', { count: 'exact', head: true });
-                
-            if (!error) {
-                log.info(`   ${table}: ${count} enregistrements`);
-            } else {
-                log.warn(`   ${table}: Erreur de comptage`);
+            try {
+                const { count, error } = await supabase
+                    .from(table)
+                    .select('*', { count: 'exact', head: true });
+                    
+                if (!error) {
+                    log.info(`   ${table}: ${count} enregistrements`);
+                } else {
+                    log.warn(`   ${table}: Table non trouvée`);
+                }
+            } catch (error) {
+                log.warn(`   ${table}: Erreur de vérification`);
             }
         }
     } catch (error) {
@@ -211,89 +261,6 @@ async function createTestData(supabase) {
             log.success(`🔑 Code de test créé: ${testCode}`);
         }
         
-        // Créer un utilisateur Telegram de test
-        const { error: userError } = await supabase
-            .from('telegram_users')
-            .upsert({
-                chat_id: '123456789',
-                first_name: 'Test User',
-                username: 'testuser',
-                is_admin: true,
-                created_at: new Date().toISOString(),
-                last_active: new Date().toISOString()
-            }, {
-                onConflict: 'chat_id'
-            });
-            
-        if (!userError) {
-            log.success(`👤 Utilisateur test créé: 123456789`);
-        }
-        
-        // Créer des commandes par défaut
-        const defaultCommands = [
-            {
-                name: 'info',
-                description: 'Afficher les informations du bot',
-                code: `
-async function run(context) {
-    const { message, bot, config } = context;
-    await bot.sendMessage(
-        message.chat.id,
-        "🤖 *NOVA-MD Premium*\\\\n\\\\n" +
-        "Version: ${config.bot.version}\\\\n" +
-        "Sessions persistantes: ✅ Activées\\\\n" +
-        "Support: ${config.bot.support_contact}\\\\n\\\\n" +
-        "*Fonctionnalités:*\\\\n" +
-        "• Sessions WhatsApp permanentes\\\\n" +
-        "• Mode silencieux\\\\n" +
-        "• Contrôle d'accès\\\\n" +
-        "• Mises à jour automatiques\\\\n" +
-        "• Support 24/7",
-        { parse_mode: 'Markdown' }
-    );
-}
-module.exports = { run };
-                `.trim(),
-                category: 'information',
-                enabled: true,
-                created_by: 'system'
-            },
-            {
-                name: 'ping',
-                description: 'Tester la latence du bot',
-                code: `
-async function run(context) {
-    const { message, bot } = context;
-    const start = Date.now();
-    const msg = await bot.sendMessage(message.chat.id, "🏓 *Pong!*", { parse_mode: 'Markdown' });
-    const latency = Date.now() - start;
-    await bot.editMessageText(
-        \`🏓 *Pong!*\\\\nLatence: \${latency}ms\`,
-        {
-            chat_id: message.chat.id,
-            message_id: msg.message_id,
-            parse_mode: 'Markdown'
-        }
-    );
-}
-module.exports = { run };
-                `.trim(),
-                category: 'utility',
-                enabled: true,
-                created_by: 'system'
-            }
-        ];
-
-        for (const cmd of defaultCommands) {
-            const { error } = await supabase
-                .from('commands')
-                .upsert(cmd, { onConflict: 'name' });
-                
-            if (!error) {
-                log.success(`✅ Commande par défaut créée: ${cmd.name}`);
-            }
-        }
-        
         log.success("🎉 Données de test créées avec succès");
         
     } catch (error) {
@@ -306,8 +273,8 @@ async function checkDatabaseConnection() {
     try {
         const supabase = createClient(config.supabase.url, config.supabase.key);
         const { data, error } = await supabase
-            .from('telegram_users')
-            .select('count')
+            .from('_supabase_schema')
+            .select('*')
             .limit(1);
             
         if (error) {

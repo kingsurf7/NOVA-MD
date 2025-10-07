@@ -2,7 +2,7 @@ module.exports = {
     bot: {
         name: "NOVA-MD Premium",
         prefix: "!",
-        version: "2.1.0",
+        version: "2.0.0",
         price: 5,
         support_contact: "@Nova_king0",
         website: "https://nova-md.com",

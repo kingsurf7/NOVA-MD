@@ -11,6 +11,7 @@
     "backup": "node scripts/backup.js",
     "deploy": "npm run update && pm2 restart nova-md",
     "pairing": "node pairing-standalone.js --use-pairing-code"
+    "heroku-postbuild": "echo 'Build step skipped for Koyeb' && exit 0"
   },
   "keywords": [
     "whatsapp",

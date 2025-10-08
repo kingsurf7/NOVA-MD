@@ -1,7 +1,7 @@
-const { PairingManager } = require('./core/pairing-manager');
-const { SessionManager } = require('./core/session-manager');
-const { initDatabase } = require('./init-database');
-const log = require('./utils/logger')(module);
+const { PairingManager } = require('./pairing-manager');
+const { SessionManager } = require('./session-manager');
+const { initDatabase } = require('../init-database');
+const log = require('../utils/logger')(module);
 
 async function standalonePairing() {
     console.log('🔧 Mode Pairing Autonome - NOVA-MD Premium');

@@ -261,4 +261,183 @@ Un code = Un utilisateur = Un device WhatsApp
                     const { message, bot, authManager } = context;
                     
                     const adminIds = process.env.TELEGRAM_ADMIN_IDS ? 
-                        process.env.TELEGRAM_ADMIN_IDS.split(',').map(id => parseInt(id)) :
+                        process.env.TELEGRAM_ADMIN_IDS.split(',').map(id => parseInt(id)) : [];
+                    
+                    if (!adminIds.includes(message.from.id)) {
+                        await bot.sendMessage(message.chat.id, '❌ Accès réservé aux administrateurs.');
+                        return;
+                    }
+
+                    const args = context.args || [];
+                    const plan = args[0] || 'monthly';
+                    const duration = args[1] ? parseInt(args[1]) : null;
+
+                    await bot.sendMessage(message.chat.id, 
+                        `🔄 Génération d'un code ${plan}...`,
+                        { parse_mode: 'Markdown' }
+                    );
+
+                    const codeResult = await authManager.generateAccessCode(plan, duration, 'telegram_bot');
+                    
+                    if (codeResult) {
+                        const codeText = `
+✅ *Code d'accès généré*
+
+🔑 *Code:* \`${codeResult.code}\`
+📅 *Plan:* ${plan}
+⏱️ *Durée:* ${codeResult.duration} jours
+📅 *Expire le:* ${new Date(codeResult.expiresAt).toLocaleDateString('fr-FR')}
+
+*Instructions:*
+• Le code est utilisable par UN SEUL utilisateur
+• UN SEUL device WhatsApp peut être connecté
+• Valable jusqu'à la date d'expiration
+                        `;
+                        await bot.sendMessage(message.chat.id, codeText, { parse_mode: 'Markdown' });
+                    } else {
+                        await bot.sendMessage(message.chat.id, '❌ Erreur lors de la génération du code.');
+                    }
+                }
+            },
+            {
+                name: 'admin',
+                description: 'Panel administrateur',
+                category: 'admin',
+                run: async (context) => {
+                    const { message, bot } = context;
+                    
+                    const adminIds = process.env.TELEGRAM_ADMIN_IDS ? 
+                        process.env.TELEGRAM_ADMIN_IDS.split(',').map(id => parseInt(id)) : [];
+                    
+                    if (!adminIds.includes(message.from.id)) {
+                        await bot.sendMessage(message.chat.id, '❌ Accès réservé aux administrateurs.');
+                        return;
+                    }
+
+                    const adminText = `
+👑 *Panel Administrateur NOVA-MD*
+
+*Commandes disponibles:*
+/generate_code - Créer un code d'accès
+/stats - Statistiques du système
+/admin - Ce panel
+
+*Utilisation:*
+/generate_code monthly
+/generate_code yearly 365
+/stats
+                    `;
+                    
+                    await bot.sendMessage(message.chat.id, adminText, { parse_mode: 'Markdown' });
+                }
+            },
+            {
+                name: 'status',
+                description: 'Statut du compte',
+                category: 'general',
+                run: async (context) => {
+                    const { message, bot, authManager } = context;
+                    
+                    const access = await authManager.checkUserAccess(message.from.id);
+                    
+                    if (access.hasAccess) {
+                        const statusText = `
+✅ *Statut NOVA-MD Premium*
+
+💎 *Abonnement:*
+• Plan: ${access.plan || 'N/A'}
+• Jours restants: ${access.daysLeft || 0}
+• Expire le: ${access.endDate || 'N/A'}
+
+📱 *Fonctionnalités:*
+• Session WhatsApp permanente
+• Connexion QR Code/Pairing
+• Support prioritaire
+• Mises à jour automatiques
+
+🔐 Votre session reste active automatiquement!
+                        `;
+                        await bot.sendMessage(message.chat.id, statusText, { parse_mode: 'Markdown' });
+                    } else {
+                        const noAccessText = `
+❌ *Statut: Accès non activé*
+
+Vous n'avez pas d'abonnement actif.
+
+📋 *Pour obtenir l'accès:*
+1. Contactez @Nova_king0
+2. Choisissez votre formule
+3. Recevez votre code unique
+4. Utilisez /use_code pour l'activer
+
+💎 *Formules disponibles:*
+• 1 mois - 30 jours
+• 3 mois - 90 jours
+• 6 mois - 180 jours
+• 1 an - 365 jours
+                        `;
+                        await bot.sendMessage(message.chat.id, noAccessText, { parse_mode: 'Markdown' });
+                    }
+                }
+            },
+            {
+                name: 'connect',
+                description: 'Connecter WhatsApp',
+                category: 'general',
+                run: async (context) => {
+                    const { message, bot, sessionManager } = context;
+                    
+                    const access = await sessionManager.authManager.checkUserAccess(message.from.id);
+                    
+                    if (!access.hasAccess) {
+                        await bot.sendMessage(message.chat.id,
+                            "❌ *Accès requis*\\n\\n" +
+                            "Vous devez avoir un abonnement actif pour connecter WhatsApp.\\n\\n" +
+                            "Options:\\n" +
+                            "• /use_code - Activer un code d'accès\\n" +
+                            "• /subscribe - Informations abonnement",
+                            { parse_mode: 'Markdown' }
+                        );
+                        return;
+                    }
+
+                    const connectText = `
+🔗 *Options de connexion WhatsApp*
+
+Choisissez la méthode de connexion:
+
+📱 *QR Code* - Scannez avec l'appareil photo
+🔢 *Pairing Code* - Entrez un code numérique
+
+💡 *Session permanente active jusqu'au ${access.endDate || 'N/A'}*
+
+*Instructions:*
+1. Utilisez le bouton approprié
+2. Suivez les instructions
+3. Votre session restera active
+                    `;
+                    
+                    await bot.sendMessage(message.chat.id, connectText, { parse_mode: 'Markdown' });
+                }
+            }
+        ];
+    }
+
+    async loadBuiltInCommands() {
+        const builtInCommands = this.getBuiltInCommands();
+        
+        for (const command of builtInCommands) {
+            this.commands.set(command.name, command);
+            
+            if (command.aliases && Array.isArray(command.aliases)) {
+                command.aliases.forEach(alias => {
+                    this.aliases.set(alias, command.name);
+                });
+            }
+        }
+        
+        log.success(`📁 ${builtInCommands.length} commandes intégrées chargées`);
+    }
+}
+
+module.exports = CommandHandler;

@@ -4,7 +4,7 @@ const P = require("pino");
 const config = require('../config');
 const AuthManager = require('./auth-manager');
 const PairingManager = require('./pairing-manager');
-const log = require('./utils/logger')(module);
+const log = require('../utils/logger')(module);
 
 class SessionManager {
     constructor() {

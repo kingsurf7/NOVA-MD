@@ -2,8 +2,8 @@ const { exec } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
 const axios = require('axios');
-const config = require('./config');
-const log = require('./utils/logger')(module);
+const config = require('../config');
+const log = require('../utils/logger')(module);
 
 class UpdateManager {
     constructor(bot, sessionManager) {

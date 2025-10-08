@@ -2,8 +2,8 @@ const fs = require('fs-extra');
 const path = require('path');
 const vm = require('vm');
 const axios = require('axios');
-const config = require('./config');
-const log = require('./utils/logger')(module);
+const config = require('../config');
+const log = require('../utils/logger')(module);
 
 class DynamicCommandManager {
     constructor() {

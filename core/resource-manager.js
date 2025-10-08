@@ -1,5 +1,5 @@
 const os = require('os');
-const log = require('./utils/logger')(module);
+const log = require('../utils/logger')(module);
 
 class ResourceManager {
     constructor() {

@@ -195,32 +195,85 @@ class NovaMDTelegramBot:
             parse_mode='MarkdownV2'
         )
 
-    async def connect_options(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
+	async def connect_options(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+		chat_id = update.effective_chat.id
+    
+		 # Vérifier si l'utilisateur a un accès actif
+		access = await self.check_user_access(chat_id)
+    
+		if not access['hasAccess']:
+        # OFFRIR UN ESSAI
+    		keyboard = [
+            [KeyboardButton("🎯 Essai 24h Gratuit"), KeyboardButton("💎 Acheter Premium")],
+            [KeyboardButton("📱 Menu Principal")]
+        ]
+    		reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
-        # Vérifier si l'utilisateur a un accès actif
-        access = await self.check_user_access(chat_id)
-        
-        if not access['hasAccess']:
-            await update.message.reply_text(
-                "❌ *Accès requis*\n\n"
-                "Vous devez avoir un abonnement actif pour connecter WhatsApp\\.\n\n"
-                "Options:\n"
-                "• 🔑 Utiliser Code \\- Activer un code d'accès\n"
-                "• 💎 S'abonner \\- Informations abonnement",
-                parse_mode='MarkdownV2',
-                reply_markup=self.get_main_keyboard()
-            )
-            return
-            
-        await update.message.reply_text(
-            "🔗 *Choisissez la méthode de connexion:*\n\n"
-            "*📱 QR Code* \\- Scannez avec l'appareil photo\n"
-            "*🔢 Pairing Code* \\- Entrez un code numérique\n\n"
-            f"💡 *Session permanente active jusqu'au {access.get('endDate', 'N/A')}*",
-            reply_markup=self.get_connection_keyboard(),
-            parse_mode='MarkdownV2'
+    		await update.message.reply_text(
+            "🔗 *Options de Connexion WhatsApp*\n\n"
+            "📱 *Mode Essai Gratuit (24h):*\n"
+            "• Session WhatsApp temporaire\n"
+            "• Fonctionnalités de base\n"
+            "• Parfaite pour tester\n\n"
+            "💎 *Premium (Recommandé):*\n"
+            "• Session PERMANENTE\n"
+            "• Toutes les fonctionnalités\n"
+            "• Support prioritaire\n\n"
+            "*Choisissez une option:*",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
         )
+    	return
+        
+		await update.message.reply_text(
+        "🔗 *Choisissez la méthode de connexion:*\n\n"
+        "*📱 QR Code* - Scannez avec l'appareil photo\n"
+        "*🔢 Pairing Code* - Entrez un code numérique\n\n"
+        f"💡 *Session permanente active jusqu'au {access.get('endDate', 'N/A')}*",
+        reply_markup=self.get_connection_keyboard(),
+        parse_mode='Markdown'
+        )
+
+	async def start_trial_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+		chat_id = update.effective_chat.id
+		user = update.effective_user
+    
+		await update.message.reply_text(
+        "🎯 *Démarrage de votre essai gratuit 24h!*\n\n"
+        "Création de votre session WhatsApp...",
+        parse_mode='Markdown'
+    )
+    
+		try:
+    		async with aiohttp.ClientSession() as session:
+        		async with session.post(f"{NODE_API_URL}/api/sessions/create", json={
+                'chat_id': str(chat_id),
+                'user_name': user.first_name,
+                'method': 'qr',
+                'persistent': False
+        		}) as response:
+            		result = await response.json()
+                
+            		if result.get('success'):
+                		await update.message.reply_text(
+                        "✅ *Essai activé pour 24 heures!*\n\n"
+                        "Vous pouvez maintenant connecter WhatsApp.\n"
+                        "Choisissez la méthode de connexion:",
+                        parse_mode='Markdown',
+                        reply_markup=self.get_connection_keyboard()
+                		)
+            		else:
+                		await update.message.reply_text(
+                        "❌ *Impossible de créer l'essai*\n\n"
+                        "Réessayez ou contactez le support.",
+                        parse_mode='Markdown'
+                    )
+		except Exception as e:
+    		await update.message.reply_text(
+            "❌ *Erreur de connexion*\n\n"
+            "Le serveur ne répond pas. Réessayez plus tard.",
+            parse_mode='Markdown'
+                    )
 
     async def connect_whatsapp_qr(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id

@@ -1,11 +1,11 @@
 const { createClient } = require('@supabase/supabase-js');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
 const P = require("pino");
-const config = require('./config');
+const config = require('../config');
 const AuthManager = require('./auth-manager');
 const PairingManager = require('./pairing-manager');
 const TrialManager = require('./trial-manager');
-const log = require('./utils/logger')(module);
+const log = require('../utils/logger')(module);
 
 class SessionManager {
     constructor() {

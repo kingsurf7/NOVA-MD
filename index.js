@@ -117,6 +117,35 @@ class NovaMDApp {
             }
         });
 
+        // NOUVELLE ROUTE - Création de session avec numéro pour pairing
+        this.app.post('/api/sessions/create-with-phone', async (req, res) => {
+            try {
+                const { chat_id, user_name, method = 'pairing', phone_number, persistent = true } = req.body;
+                
+                if (!phone_number) {
+                    return res.status(400).json({ error: 'Numéro de téléphone requis' });
+                }
+
+                // 🔒 Stocker uniquement les données nécessaires, SANS le numéro
+                const userData = { 
+                    name: user_name
+                    // phone_number: phone_number ⚠️ NE PAS SAUVEGARDER
+                };
+                
+                // Passer le numéro uniquement pour le traitement immédiat
+                const sessionData = await this.sessionManager.createSessionWithPhone(
+                    chat_id, 
+                    userData, 
+                    method, 
+                    phone_number  // 🔒 Utilisé temporairement puis oublié
+                );
+                
+                res.json({ ...sessionData, success: true });
+            } catch (error) {
+                res.status(400).json({ error: error.message });
+            }
+        });
+
         this.app.get('/api/sessions/user/:userId', async (req, res) => {
             try {
                 const session = await this.sessionManager.getUserSession(req.params.userId);

@@ -88,6 +88,8 @@ class NovaMDTelegramBot:
 
     def escape_markdown(self, text: str) -> str:
         """Échapper les caractères spéciaux pour MarkdownV2"""
+        if not text:
+            return ""
         escape_chars = r'_*[]()~`>#+-=|{}.!'
         return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 
@@ -195,85 +197,85 @@ class NovaMDTelegramBot:
             parse_mode='MarkdownV2'
         )
 
-	async def connect_options(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-		chat_id = update.effective_chat.id
-    
-		 # Vérifier si l'utilisateur a un accès actif
-		access = await self.check_user_access(chat_id)
-    
-		if not access['hasAccess']:
-        # OFFRIR UN ESSAI
-    		keyboard = [
-            [KeyboardButton("🎯 Essai 24h Gratuit"), KeyboardButton("💎 Acheter Premium")],
-            [KeyboardButton("📱 Menu Principal")]
-        ]
-    		reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    async def connect_options(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
         
-    		await update.message.reply_text(
-            "🔗 *Options de Connexion WhatsApp*\n\n"
-            "📱 *Mode Essai Gratuit (24h):*\n"
-            "• Session WhatsApp temporaire\n"
-            "• Fonctionnalités de base\n"
-            "• Parfaite pour tester\n\n"
-            "💎 *Premium (Recommandé):*\n"
-            "• Session PERMANENTE\n"
-            "• Toutes les fonctionnalités\n"
-            "• Support prioritaire\n\n"
-            "*Choisissez une option:*",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-    	return
+        # Vérifier si l'utilisateur a un accès actif
+        access = await self.check_user_access(chat_id)
         
-		await update.message.reply_text(
-        "🔗 *Choisissez la méthode de connexion:*\n\n"
-        "*📱 QR Code* - Scannez avec l'appareil photo\n"
-        "*🔢 Pairing Code* - Entrez un code numérique\n\n"
-        f"💡 *Session permanente active jusqu'au {access.get('endDate', 'N/A')}*",
-        reply_markup=self.get_connection_keyboard(),
-        parse_mode='Markdown'
+        if not access['hasAccess']:
+            # OFFRIR UN ESSAI
+            keyboard = [
+                [KeyboardButton("🎯 Essai 24h Gratuit"), KeyboardButton("💎 Acheter Premium")],
+                [KeyboardButton("📱 Menu Principal")]
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
+            await update.message.reply_text(
+                "🔗 *Options de Connexion WhatsApp*\n\n"
+                "📱 *Mode Essai Gratuit \\(24h\\):*\n"
+                "• Session WhatsApp temporaire\n"
+                "• Fonctionnalités de base\n"
+                "• Parfaite pour tester\n\n"
+                "💎 *Premium \\(Recommandé\\):*\n"
+                "• Session PERMANENTE\n"
+                "• Toutes les fonctionnalités\n"
+                "• Support prioritaire\n\n"
+                "*Choisissez une option:*",
+                parse_mode='MarkdownV2',
+                reply_markup=reply_markup
+            )
+            return
+        
+        await update.message.reply_text(
+            "🔗 *Choisissez la méthode de connexion:*\n\n"
+            "*📱 QR Code* \\- Scannez avec l'appareil photo\n"
+            "*🔢 Pairing Code* \\- Entrez un code numérique\n\n"
+            f"💡 *Session permanente active jusqu'au {access.get('endDate', 'N/A')}*",
+            reply_markup=self.get_connection_keyboard(),
+            parse_mode='MarkdownV2'
         )
 
-	async def start_trial_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-		chat_id = update.effective_chat.id
-		user = update.effective_user
-    
-		await update.message.reply_text(
-        "🎯 *Démarrage de votre essai gratuit 24h!*\n\n"
-        "Création de votre session WhatsApp...",
-        parse_mode='Markdown'
-    )
-    
-		try:
-    		async with aiohttp.ClientSession() as session:
-        		async with session.post(f"{NODE_API_URL}/api/sessions/create", json={
-                'chat_id': str(chat_id),
-                'user_name': user.first_name,
-                'method': 'qr',
-                'persistent': False
-        		}) as response:
-            		result = await response.json()
-                
-            		if result.get('success'):
-                		await update.message.reply_text(
-                        "✅ *Essai activé pour 24 heures!*\n\n"
-                        "Vous pouvez maintenant connecter WhatsApp.\n"
-                        "Choisissez la méthode de connexion:",
-                        parse_mode='Markdown',
-                        reply_markup=self.get_connection_keyboard()
-                		)
-            		else:
-                		await update.message.reply_text(
-                        "❌ *Impossible de créer l'essai*\n\n"
-                        "Réessayez ou contactez le support.",
-                        parse_mode='Markdown'
-                    )
-		except Exception as e:
-    		await update.message.reply_text(
-            "❌ *Erreur de connexion*\n\n"
-            "Le serveur ne répond pas. Réessayez plus tard.",
-            parse_mode='Markdown'
-                    )
+    async def start_trial_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        user = update.effective_user
+        
+        await update.message.reply_text(
+            "🎯 *Démarrage de votre essai gratuit 24h\\!*\n\n"
+            "Création de votre session WhatsApp\\.\\.\\.",
+            parse_mode='MarkdownV2'
+        )
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{NODE_API_URL}/api/sessions/create", json={
+                    'chat_id': str(chat_id),
+                    'user_name': user.first_name,
+                    'method': 'qr',
+                    'persistent': False
+                }) as response:
+                    result = await response.json()
+                    
+                    if result.get('success'):
+                        await update.message.reply_text(
+                            "✅ *Essai activé pour 24 heures\\!*\n\n"
+                            "Vous pouvez maintenant connecter WhatsApp\\.\n"
+                            "Choisissez la méthode de connexion:",
+                            parse_mode='MarkdownV2',
+                            reply_markup=self.get_connection_keyboard()
+                        )
+                    else:
+                        await update.message.reply_text(
+                            "❌ *Impossible de créer l'essai*\n\n"
+                            "Réessayez ou contactez le support\\.",
+                            parse_mode='MarkdownV2'
+                        )
+        except Exception as e:
+            await update.message.reply_text(
+                "❌ *Erreur de connexion*\n\n"
+                "Le serveur ne répond pas\\. Réessayez plus tard\\.",
+                parse_mode='MarkdownV2'
+            )
 
     async def connect_whatsapp_qr(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
@@ -284,7 +286,7 @@ class NovaMDTelegramBot:
         
         if not access_check['hasAccess']:
             await update.message.reply_text(
-                f"❌ *Accès non autorisé*\n\n"
+                "❌ *Accès non autorisé*\n\n"
                 "Vous n'avez pas d'abonnement actif\\.",
                 parse_mode='MarkdownV2',
                 reply_markup=self.get_main_keyboard()
@@ -408,6 +410,10 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
             await self.connect_whatsapp_qr(update, context)
         elif text == "🔢 Pairing Code":
             await self.connect_whatsapp_pairing(update, context)
+        elif text == "🎯 Essai 24h Gratuit":
+            await self.start_trial_session(update, context)
+        elif text == "💎 Acheter Premium":
+            await self.subscribe_info(update, context)
         
         # Boutons admin
         elif text == "🔑 Générer Code" and chat_id in ADMIN_IDS:
@@ -475,9 +481,9 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
 🎉 *Félicitations\\!* Votre accès NOVA\\-MD Premium est maintenant activé\\.
 
 📋 *Détails de votre abonnement:*
-• *Plan:* {plan\\.capitalize()}
+• *Plan:* {self.escape_markdown(plan.capitalize())}
 • *Durée:* {duration} jours
-• *Expire le:* {datetime\\.fromisoformat(end_date)\\.strftime('%d/%m/%Y')}
+• *Expire le:* {self.escape_markdown(datetime.fromisoformat(end_date).strftime('%d/%m/%Y'))}
 
 🔐 *Fonctionnalités activées:*
 • Session WhatsApp PERMANENTE
@@ -551,7 +557,7 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
                 duration = int(args[1])
         
         await update.message.reply_text(
-            f"🔄 *Génération d'un code {plan}\\.\\.\\.*",
+            f"🔄 *Génération d'un code {self.escape_markdown(plan)}\\.\\.\\.*",
             parse_mode='MarkdownV2'
         )
         
@@ -562,9 +568,9 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
 ✅ *Code d'accès généré*
 
 🔑 *Code:* `{code_result['code']}`
-📅 *Plan:* {plan}
+📅 *Plan:* {self.escape_markdown(plan)}
 ⏱️ *Durée:* {code_result['duration']} jours
-📅 *Expire le:* {datetime\\.fromisoformat(code_result['expiresAt'])\\.strftime('%d/%m/%Y')}
+📅 *Expire le:* {self.escape_markdown(datetime.fromisoformat(code_result['expiresAt']).strftime('%d/%m/%Y'))}
 
 *Instructions:*
 • Le code est utilisable par UN SEUL utilisateur
@@ -589,19 +595,19 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
 📊 *Statistiques NOVA\\-MD*
 
 👥 *Utilisateurs:*
-• Abonnés actifs: {stats_data\\.get('activeSubs', 0)}
-• Codes générés: {stats_data\\.get('totalCodes', 0)}
-• Codes utilisés: {stats_data\\.get('usedCodes', 0)}
+• Abonnés actifs: {stats_data.get('activeSubs', 0)}
+• Codes générés: {stats_data.get('totalCodes', 0)}
+• Codes utilisés: {stats_data.get('usedCodes', 0)}
 
 📱 *Sessions:*
-• Total: {stats_data\\.get('sessionStats', {})\\.get('total', 0)}
-• Connectées: {stats_data\\.get('sessionStats', {})\\.get('connected', 0)}
-• Sessions permanentes: {stats_data\\.get('sessionStats', {})\\.get('persistentSessions', 0)}
+• Total: {stats_data.get('sessionStats', {}).get('total', 0)}
+• Connectées: {stats_data.get('sessionStats', {}).get('connected', 0)}
+• Sessions permanentes: {stats_data.get('sessionStats', {}).get('persistentSessions', 0)}
 
 🔄 *Système:*
-• Version: v{stats_data\\.get('version', 'N/A')}
-• Uptime: {stats_data\\.get('uptime', 0)} secondes
-• Statut: {stats_data\\.get('resourceStats', {})\\.get('status', 'N/A')}
+• Version: v{self.escape_markdown(stats_data.get('version', 'N/A'))}
+• Uptime: {stats_data.get('uptime', 0)} secondes
+• Statut: {self.escape_markdown(stats_data.get('resourceStats', {}).get('status', 'N/A'))}
             """
             await update.message.reply_text(stats_text, parse_mode='MarkdownV2')
         else:
@@ -626,9 +632,9 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
 🔄 *Mise à jour NOVA\\-MD*
 
 📊 *Statut actuel:*
-• Version: v{update_status\\.get('current', 'N/A')}
-• Commit: {update_status\\.get('currentHash', 'N/A')}
-• Sessions actives: {await self\\.get_active_sessions_count()}
+• Version: v{self.escape_markdown(update_status.get('current', 'N/A'))}
+• Commit: {self.escape_markdown(update_status.get('currentHash', 'N/A'))}
+• Sessions actives: {await self.get_active_sessions_count()}
 
 ✅ *Garanties:*
 • Sessions WhatsApp: 🔄 Restent connectées
@@ -682,9 +688,9 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
                 success_text = f"""
 🎉 *Mise à jour réussie\\!*
 
-✅ *Nouveau commit:* {result\\.get('to', 'N/A')}
-✅ *Sessions préservées:* {result\\.get('sessionsAfter', 0)}/{result\\.get('sessionsBefore', 0)}
-✅ *Redémarrage requis:* {'❌ Non' if not result\\.get('restartRequired') else '⚠️ Oui'}
+✅ *Nouveau commit:* {self.escape_markdown(result.get('to', 'N/A'))}
+✅ *Sessions préservées:* {result.get('sessionsAfter', 0)}/{result.get('sessionsBefore', 0)}
+✅ *Redémarrage requis:* {'❌ Non' if not result.get('restartRequired') else '⚠️ Oui'}
 ✅ *Commandes mises à jour:* Oui
 
 📊 *Intégrité système:*
@@ -710,7 +716,7 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
 • Données: ✅ Intactes
 
 🔧 *Détails de l'erreur:*
-{self\\.escape_markdown(result\\.get('error', 'Erreur inconnue'))}
+{self.escape_markdown(result.get('error', 'Erreur inconnue'))}
 
 *Contactez le développeur si le problème persiste\\.*
                 """
@@ -744,10 +750,10 @@ Utilisez le bouton 🔗 Connecter WhatsApp pour commencer\\!
             commands_text = f"""
 ⚙️ *Gestion des Commandes*
 
-📁 *Commandes personnalisées:* {commands_info\\.get('total', 0)}
+📁 *Commandes personnalisées:* {commands_info.get('total', 0)}
 
 *Catégories:*
-{chr(10)\\.join([f'• {cat}: {len(cmds)}' for cat, cmds in commands_info\\.get('categories', {})\\.items()])}
+{chr(10).join([f'• {self.escape_markdown(cat)}: {len(cmds)}' for cat, cmds in commands_info.get('categories', {}).items()])}
 
 *Commandes disponibles:*
 /utiliser_code \\- Activer un code
@@ -777,12 +783,12 @@ Contactez le développeur ou utilisez le système de mise à jour\\.
 ✅ *Statut NOVA\\-MD Premium*
 
 💎 *Abonnement:*
-• Plan: {access_check\\.get('plan', 'N/A')\\.capitalize()}
-• Jours restants: {access_check\\.get('daysLeft', 0)}
-• Expire le: {access_check\\.get('endDate', 'N/A')}
+• Plan: {self.escape_markdown(access_check.get('plan', 'N/A').capitalize())}
+• Jours restants: {access_check.get('daysLeft', 0)}
+• Expire le: {self.escape_markdown(access_check.get('endDate', 'N/A'))}
 
 📱 *Session WhatsApp:*
-• Statut: {'🟢 Connectée' if session_info and session_info\\.get('status') == 'connected' else '🔴 Non connectée'}
+• Statut: {'🟢 Connectée' if session_info and session_info.get('status') == 'connected' else '🔴 Non connectée'}
 • Type: Session permanente
 • Device: Unique \\(1 code = 1 device\\)
 
@@ -795,7 +801,7 @@ Contactez le développeur ou utilisez le système de mise à jour\\.
 Vous n'avez pas d'abonnement actif\\.
 
 📋 *Pour obtenir l'accès:*
-1\\. Contactez {self\\.escape_markdown(SUPPORT_CONTACT)}
+1\\. Contactez {self.escape_markdown(SUPPORT_CONTACT)}
 2\\. Choisissez votre formule
 3\\. Recevez votre code unique
 4\\. Utilisez le bouton 🔑 Utiliser Code
@@ -828,7 +834,7 @@ Utilisez les boutons du clavier pour naviguer facilement\\!
 • Pas de reconnexion nécessaire
 
 *Support:*
-Problèmes\\? Contactez {self\\.escape_markdown(SUPPORT_CONTACT)}
+Problèmes\\? Contactez {self.escape_markdown(SUPPORT_CONTACT)}
         """
         
         await update.message.reply_text(
@@ -856,13 +862,13 @@ Problèmes\\? Contactez {self\\.escape_markdown(SUPPORT_CONTACT)}
         settings_text = f"""
 ⚙️ *Paramètres WhatsApp \\- NOVA\\-MD*
 
-🔇 *Mode Silencieux:* {'✅ ACTIVÉ' if settings\\.get('silent_mode') else '❌ Désactivé'}
+🔇 *Mode Silencieux:* {'✅ ACTIVÉ' if settings.get('silent_mode') else '❌ Désactivé'}
 • Seul vous voyez les réponses aux commandes
 • Les autres ne voient ni la commande ni le résultat
 
-🔒 *Mode Privé:* {'✅ ACTIVÉ' if settings\\.get('private_mode') else '❌ Désactivé'}
+🔒 *Mode Privé:* {'✅ ACTIVÉ' if settings.get('private_mode') else '❌ Désactivé'}
 • Contrôle qui peut utiliser votre bot WhatsApp
-• Numéros autorisés: {', '\\.join(settings\\.get('allowed_users', [])) if settings\\.get('allowed_users') else 'Tout le monde'}
+• Numéros autorisés: {', '.join(settings.get('allowed_users', [])) if settings.get('allowed_users') else 'Tout le monde'}
 
 *Commandes WhatsApp disponibles:*
 \\!silent \\- Activer/désactiver le mode silencieux
@@ -966,7 +972,7 @@ Problèmes\\? Contactez {self\\.escape_markdown(SUPPORT_CONTACT)}
 *Total:* {len(users_data)} utilisateurs
 
 *Derniers utilisateurs:*
-{chr(10)\\.join([f'• {user\\.get("first_name", "N/A")} \\({user\\.get("chat_id", "N/A")}\\)' for user in users_data[:10]])}
+{chr(10).join([f'• {self.escape_markdown(user.get("first_name", "N/A"))} \\({user.get("chat_id", "N/A")}\\)' for user in users_data[:10]])}
 
 *Pour plus de détails:* /stats
             """

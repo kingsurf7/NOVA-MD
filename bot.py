@@ -513,7 +513,7 @@ Veuillez réessayer:
 📋 Détails de votre abonnement:
 • Plan: {plan.capitalize()}
 • Durée: {duration} jours
-• Expire le: {datetime.fromisoformat(end_date).strftime('%d/%m/%Y')}
+• Expire le: {end_date.strftime('%d/%m/%Y') if hasattr(end_date, 'strftime') else str(end_date)} 
 
 🔐 Fonctionnalités activées:
 • Session WhatsApp PERMANENTE

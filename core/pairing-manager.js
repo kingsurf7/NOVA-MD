@@ -24,7 +24,7 @@ class PairingManager {
     this.activePairings = new Map();
   }
 
-  async initializePairing(userId, userData) {
+  async initializePairing(userId, userData, phoneNumber = null) {
     try {
       log.info(`🔐 Initialisation pairing pour ${userId}`);
       
@@ -35,7 +35,13 @@ class PairingManager {
         await delay(800);
       }
 
-      return await this.startPairingProcess(userId, userData);
+      // Si numéro fourni, l'utiliser directement
+      if (phoneNumber) {
+        log.info(`📱 Utilisation du numéro fourni pour ${userId}`);
+        return await this.startPairingWithPhone(userId, userData, phoneNumber);
+      } else {
+        return await this.startPairingProcess(userId, userData);
+      }
       
     } catch (error) {
       log.error('❌ Erreur initialisation pairing:', error);
@@ -55,7 +61,6 @@ class PairingManager {
 
     try {
       const socket = makeWASocket({
-        printQRInTerminal: !this.isPairingMode,
         logger: pino({ level: "silent" }),
         browser: ["Chrome (Linux)", "", ""],
         auth: state,
@@ -75,7 +80,7 @@ class PairingManager {
           await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, rl);
           
         } else if (connection === "close") {
-          await this.handleConnectionClose(lastDisconnect, userId, rl);
+          await this.handleConnectionClose(null, lastDisconnect, userId, rl);
         }
       });
 
@@ -88,6 +93,66 @@ class PairingManager {
     } catch (error) {
       rl.close();
       log.error('❌ Erreur processus pairing:', error);
+      throw error;
+    }
+  }
+
+  async startPairingWithPhone(userId, userData, phoneNumber) {
+    const { state, saveCreds } = await useMultiFileAuthState("./" + this.sessionName);
+    
+    try {
+      const socket = makeWASocket({
+        logger: pino({ level: "silent" }),
+        browser: ["Chrome (Linux)", "", ""],
+        auth: state,
+        syncFullHistory: false,
+        markOnlineOnConnect: false
+      });
+
+      // Générer directement le code avec le numéro fourni
+      setTimeout(async () => {
+        try {
+          let code = await socket.requestPairingCode(phoneNumber);
+          code = code?.match(/.{1,4}/g)?.join("-") || code;
+          
+          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}`);
+          // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
+          
+          if (this.sessionManager.telegramBot) {
+            await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+          }
+
+        } catch (error) {
+          log.error('❌ Erreur génération code pairing:', error);
+          if (this.sessionManager.telegramBot) {
+            await this.sessionManager.telegramBot.sendMessage(
+              userId,
+              "❌ Erreur lors de la génération du code. Réessayez."
+            );
+          }
+        }
+      }, 3000);
+
+      socket.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
+        
+        if (connection === "open") {
+          log.success(`✅ Connexion WhatsApp réussie via pairing pour ${userId}`);
+          await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
+          
+        } else if (connection === "close") {
+          await this.handleConnectionClose(null, lastDisconnect, userId, null);
+        }
+      });
+
+      socket.ev.on("creds.update", saveCreds);
+
+      this.activePairings.set(userId, { socket, rl: null, userData });
+
+      return { success: true, method: 'pairing', message: 'Code de pairing généré' };
+
+    } catch (error) {
+      log.error('❌ Erreur processus pairing avec phone:', error);
       throw error;
     }
   }
@@ -113,9 +178,8 @@ class PairingManager {
           let code = await socket.requestPairingCode(phoneNumber);
           code = code?.match(/.{1,4}/g)?.join("-") || code;
           
-          log.success(`🔑 Code de pairing généré pour ${phoneNumber}: ${code}`);
-          
-          await this.savePairingCode(userId, phoneNumber, code);
+          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}`);
+          // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
           
           if (this.sessionManager.telegramBot) {
             await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
@@ -184,7 +248,7 @@ class PairingManager {
         }]);
 
       this.activePairings.delete(userId);
-      rl.close();
+      if (rl) rl.close();
 
       if (this.sessionManager.telegramBot) {
         let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
@@ -203,11 +267,11 @@ class PairingManager {
 
     } catch (error) {
       log.error('❌ Erreur gestion pairing réussi:', error);
-      rl.close();
+      if (rl) rl.close();
     }
   }
 
-  async handleConnectionClose(lastDisconnect, userId, rl) {
+  async handleConnectionClose(sessionId, lastDisconnect, userId, rl) {
     const pairing = this.activePairings.get(userId);
     
     if (lastDisconnect?.error?.output?.statusCode !== 401) {
@@ -231,24 +295,8 @@ class PairingManager {
     }
 
     if (pairing) {
-      pairing.rl.close();
+      if (pairing.rl) pairing.rl.close();
       this.activePairings.delete(userId);
-    }
-  }
-
-  async savePairingCode(userId, phoneNumber, code) {
-    try {
-      await this.supabase
-        .from('pairing_codes')
-        .insert([{
-          user_id: userId,
-          phone_number: phoneNumber,
-          code: code,
-          created_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString()
-        }]);
-    } catch (error) {
-      log.error('❌ Erreur sauvegarde code pairing:', error);
     }
   }
 

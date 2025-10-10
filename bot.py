@@ -255,12 +255,41 @@ Choisissez une option:
             parse_mode='MarkdownV2'
         )
 
+    async def ask_phone_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Demander le numéro de téléphone pour le pairing"""
+        chat_id = update.effective_chat.id
+        
+        await update.message.reply_text(
+            self.escape_markdown("""
+📱 Connexion par Pairing Code
+
+Veuillez entrer votre numéro de téléphone WhatsApp:
+
+• Format: 237612345678 (sans espaces, sans +)
+• Exemple: 237612345678 pour le Cameroun
+
+🔒 Confidentialité:
+• Votre numéro est utilisé UNIQUEMENT pour générer le code
+• Il n'est JAMAIS sauvegardé dans notre base de données
+• Il est supprimé immédiatement après utilisation
+
+⚠️ Important:
+• Utilisez le même numéro que sur votre téléphone
+• Le numéro doit être actif et avoir WhatsApp
+            """),
+            parse_mode='MarkdownV2',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        context.user_data['waiting_for_phone'] = True
+        context.user_data['pending_pairing'] = True
+
     async def start_trial_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         user = update.effective_user
         
         await update.message.reply_text(
-            self.escape_markdown("🎯 Démarrage de votre essai gratuit 24h!\n\nCration de votre session WhatsApp..."),
+            self.escape_markdown("🎯 Démarrage de votre essai gratuit 24h!\n\nCréation de votre session WhatsApp..."),
             parse_mode='MarkdownV2'
         )
         
@@ -372,39 +401,72 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
 
     async def connect_whatsapp_pairing(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
-        user = update.effective_user
         
         # Vérifier l'accès
         access_check = await self.check_user_access(chat_id)
         
         if not access_check['hasAccess']:
             await update.message.reply_text(
-                self.escape_markdown("❌ Accès non autorisé"),
+                self.escape_markdown("❌ Accès non autorisé\n\nVous n'avez pas d'abonnement actif."),
                 parse_mode='MarkdownV2',
                 reply_markup=self.get_main_keyboard()
             )
             return
         
+        # Demander le numéro de téléphone
+        await self.ask_phone_number(update, context)
+
+    async def process_phone_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Traiter le numéro de téléphone pour le pairing"""
+        chat_id = update.effective_chat.id
+        phone_input = update.message.text.strip()
+        user = update.effective_user
+        
+        # Nettoyer le numéro
+        phone_number = phone_input.replace('+', '').replace(' ', '').replace('-', '')
+        
+        # Validation du numéro
+        if not phone_number.isdigit() or len(phone_number) < 10:
+            await update.message.reply_text(
+                self.escape_markdown("❌ Numéro invalide\n\nVeuillez entrer un numéro valide (ex: 237612345678):"),
+                parse_mode='MarkdownV2'
+            )
+            return
+    
         await update.message.reply_text(
-            self.escape_markdown("🔢 Démarrage du processus Pairing...\n\nGénération du code de pairing..."),
+            self.escape_markdown(f"🔄 Génération du code de pairing..."),
             parse_mode='MarkdownV2'
         )
         
-        # Démarrer le pairing sur le serveur Node.js
-        session_data = await self.create_whatsapp_session(chat_id, user.first_name, 'pairing')
+        try:
+            # Créer la session avec le numéro
+            session_data = await self.create_whatsapp_session_with_phone(chat_id, user.first_name, phone_number)
+            
+            if session_data and session_data.get('success'):
+                await update.message.reply_text(
+                    self.escape_markdown("✅ Code de pairing généré!\n\nLe serveur prépare votre code...\nVous le recevrez dans quelques secondes."),
+                    parse_mode='MarkdownV2',
+                    reply_markup=self.get_main_keyboard()
+                )
+            else:
+                error_msg = session_data.get('error', 'Erreur inconnue') if session_data else 'Pas de réponse du serveur'
+                await update.message.reply_text(
+                    self.escape_markdown(f"❌ Erreur génération code\n\n{error_msg}\n\nRéessayez ou utilisez le QR Code."),
+                    parse_mode='MarkdownV2',
+                    reply_markup=self.get_main_keyboard()
+                )
+                
+        except Exception as e:
+            logger.error(f"Erreur traitement numéro: {e}")
+            await update.message.reply_text(
+                self.escape_markdown("❌ Erreur de connexion\n\nLe serveur ne répond pas. Réessayez plus tard."),
+                parse_mode='MarkdownV2',
+                reply_markup=self.get_main_keyboard()
+            )
         
-        if session_data and session_data.get('success'):
-            await update.message.reply_text(
-                self.escape_markdown("✅ Processus pairing démarré\n\nLe serveur génère votre code de pairing...\nPatientez quelques secondes."),
-                parse_mode='MarkdownV2',
-                reply_markup=self.get_main_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                self.escape_markdown("❌ Erreur démarrage pairing"),
-                parse_mode='MarkdownV2',
-                reply_markup=self.get_main_keyboard()
-            )
+        # Réinitialiser l'état
+        context.user_data['waiting_for_phone'] = False
+        context.user_data['pending_pairing'] = False
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
@@ -433,6 +495,10 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
             await self.start_trial_session(update, context)
         elif text == "💎 Acheter Premium":
             await self.subscribe_info(update, context)
+        
+        # Gestion du numéro de téléphone pour pairing
+        elif context.user_data.get('waiting_for_phone'):
+            await self.process_phone_number(update, context)
         
         # Boutons admin
         elif text == "🔑 Générer Code" and chat_id in ADMIN_IDS:
@@ -505,6 +571,19 @@ Veuillez réessayer:
             duration = validation_result.get('duration', 30)
             end_date = validation_result.get('expiresAt')
             
+            # Gestion sécurisée de la date
+            try:
+                if isinstance(end_date, str):
+                    formatted_date = datetime.fromisoformat(end_date.replace('Z', '+00:00')).strftime('%d/%m/%Y')
+                else:
+                    # Si end_date n'est pas une string, calculer la date manuellement
+                    future_date = datetime.now() + timedelta(days=duration)
+                    formatted_date = future_date.strftime('%d/%m/%Y')
+            except (ValueError, TypeError) as e:
+                # En cas d'erreur, utiliser une date par défaut
+                future_date = datetime.now() + timedelta(days=duration)
+                formatted_date = future_date.strftime('%d/%m/%Y')
+            
             success_text = self.escape_markdown(f"""
 ✅ Code validé avec succès!
 
@@ -513,7 +592,7 @@ Veuillez réessayer:
 📋 Détails de votre abonnement:
 • Plan: {plan.capitalize()}
 • Durée: {duration} jours
-• Expire le: {end_date.strftime('%d/%m/%Y') if hasattr(end_date, 'strftime') else str(end_date)} 
+• Expire le: {formatted_date}
 
 🔐 Fonctionnalités activées:
 • Session WhatsApp PERMANENTE
@@ -897,6 +976,28 @@ Pour plus de détails: /stats
         else:
             await update.message.reply_text("❌ Aucun utilisateur actif trouvé.")
 
+    async def send_pairing_code(self, chat_id, code, phone_number):
+        """Envoyer le code de pairing à l'utilisateur"""
+        pairing_text = self.escape_markdown(f"""
+🔐 Connexion par Code de Pairing
+
+📱 Votre code de pairing:
+`{code}`
+
+Instructions:
+1. Ouvrez WhatsApp sur votre téléphone
+2. Allez dans Paramètres → Appareils liés 
+3. Sélectionnez Lier un appareil
+4. Entrez le code ci-dessus
+5. Attendez la confirmation
+
+⏱️ Ce code expire dans 5 minutes
+
+La connexion se fera automatiquement!
+        """)
+        
+        await self.send_message(chat_id, pairing_text)
+
     # Méthodes d'API pour communiquer avec le serveur Node.js
     async def register_user(self, chat_id, name, username):
         """Enregistrer un utilisateur dans la base"""
@@ -971,6 +1072,22 @@ Pour plus de détails: /stats
                     return await response.json()
         except Exception as e:
             logger.error(f"Erreur création session: {e}")
+            return None
+
+    async def create_whatsapp_session_with_phone(self, chat_id, name, phone_number):
+        """Créer une session WhatsApp avec numéro pour pairing"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{NODE_API_URL}/api/sessions/create-with-phone", json={
+                    'chat_id': str(chat_id),
+                    'user_name': name,
+                    'method': 'pairing',
+                    'phone_number': phone_number,
+                    'persistent': True
+                }) as response:
+                    return await response.json()
+        except Exception as e:
+            logger.error(f"Erreur création session avec phone: {e}")
             return None
 
     async def get_user_session(self, chat_id):

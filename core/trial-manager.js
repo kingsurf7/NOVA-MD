@@ -1,6 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
-const config = require('./config');
-const log = require('./utils/logger')(module);
+const config = require('../config');
+const log = require('../utils/logger')(module);
 
 class TrialManager {
     constructor() {

@@ -3,7 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 const config = require('./config');
 const SessionManager = require('./core/session-manager');
 const AuthManager = require('./core/auth-manager');
-const UpdateManager = require('./core/update-manager');
+const SimpleUpdateManager = require('./core/simple-update-manager');
 const DynamicCommandManager = require('./core/dynamic-command-manager');
 const ResourceManager = require('./core/resource-manager');
 const CommandHandler = require('./core/command-handler');
@@ -193,10 +193,21 @@ class NovaMDApp {
                     return res.json({ success: false, error: 'Update manager non initialisé' });
                 }
                 
-                const result = force ? 
-                    await this.updateManager.forceUpdate() : 
-                    await this.updateManager.performUpdate();
-                    
+                const result = await this.updateManager.performUpdate(force);
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // NOUVELLE ROUTE - Mise à jour simple
+        this.app.post('/api/updates/simple-update', async (req, res) => {
+            try {
+                if (!this.updateManager) {
+                    return res.json({ success: false, error: 'Update manager non initialisé' });
+                }
+                
+                const result = await this.updateManager.performUpdate();
                 res.json(result);
             } catch (error) {
                 res.status(500).json({ error: error.message });
@@ -305,10 +316,7 @@ class NovaMDApp {
 
     setTelegramBot(bot) {
         this.sessionManager.setTelegramBot(bot);
-    }
-
-    setUpdateManager(updateManager) {
-        this.updateManager = updateManager;
+        this.updateManager = new SimpleUpdateManager(bot, this.sessionManager);
     }
 
     start() {
@@ -326,10 +334,6 @@ class NovaMDApp {
         
         if (this.server) {
             this.server.close();
-        }
-        
-        if (this.updateManager) {
-            this.updateManager.stopAutoUpdate();
         }
         
         const sessions = this.sessionManager.sessions;

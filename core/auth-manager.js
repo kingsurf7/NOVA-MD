@@ -13,40 +13,57 @@ class AuthManager {
     }
 
     async generateAccessCode(plan = 'monthly', durationDays = null, createdBy = 'admin') {
-        try {
-            const code = 'NOVA-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-            
-            let finalDuration = durationDays;
-            if (!finalDuration) {
-                finalDuration = config.subscriptions.defaultDurations[plan] || 30;
-            }
+		try {
+    		// Générer un code unique
+    		const code = 'NOVA-' + Math.random().toString(36).substring(2, 9).toUpperCase();
+        
+    		let finalDuration = durationDays;
+    		if (!finalDuration) {
+        		finalDuration = config.subscriptions.defaultDurations[plan] || 30;
+    		}
 
-            const expiresAt = new Date();
-            expiresAt.setDate(expiresAt.getDate() + finalDuration);
+    		const expiresAt = new Date();
+    		expiresAt.setDate(expiresAt.getDate() + finalDuration);
 
-            const { data, error } = await this.supabase
-                .from('access_codes')
-                .insert([{
-                    code: code,
-                    plan: plan,
-                    duration_days: finalDuration,
-                    status: 'active',
-                    created_by: createdBy,
-                    created_at: new Date().toISOString(),
-                    expires_at: expiresAt.toISOString(),
-                    used: false,
-                    max_usage: 1
-                }])
-                .select();
+    		const { data, error } = await this.supabase
+        		.from('access_codes')
+        		.insert([{
+            		code: code,
+            		plan: plan,
+            		duration_days: finalDuration,
+            		status: 'active',
+            		created_by: createdBy,
+            		created_at: new Date().toISOString(),
+            		expires_at: expiresAt.toISOString(),
+            		used: false,
+            		used_by: null,
+            		used_at: null,
+            		max_usage: 1
+        		}])
+        		.select();
 
-            if (error) throw error;
-            log.success(`🔑 Code d'accès généré: ${code} (Plan: ${plan}, Durée: ${finalDuration} jours)`);
-            return { code, duration: finalDuration, expiresAt: expiresAt.toISOString() };
-        } catch (error) {
-            log.error('❌ Erreur génération code:', error);
-            return null;
-        }
-    }
+    		if (error) {
+        		log.error('❌ Erreur Supabase:', error);
+        		throw error;
+    		}
+
+    		log.success(`🔑 Code généré: ${code} (${plan}, ${finalDuration} jours)`);
+    		return { 
+        		success: true, 
+        		code: code, 
+        		duration: finalDuration, 
+        		expiresAt: expiresAt.toISOString(),
+        		plan: plan
+    		};
+        
+		} catch (error) {
+    		log.error('❌ Erreur génération code:', error);
+    		return { 
+            success: false, 
+            error: error.message 
+    		};
+		}
+		}
 
     async validateAccessCode(code, userId) {
         try {

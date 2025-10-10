@@ -1,15 +1,17 @@
 const { createClient } = require('@supabase/supabase-js');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
 const P = require("pino");
-const config = require('../config');
+const config = require('./config');
 const AuthManager = require('./auth-manager');
 const PairingManager = require('./pairing-manager');
-const log = require('../utils/logger')(module);
+const TrialManager = require('./trial-manager');
+const log = require('./utils/logger')(module);
 
 class SessionManager {
     constructor() {
         this.supabase = createClient(config.supabase.url, config.supabase.key);
         this.authManager = new AuthManager();
+        this.trialManager = new TrialManager();
         this.pairingManager = new PairingManager(this);
         this.sessions = new Map();
         this.userSettings = new Map();
@@ -74,36 +76,76 @@ class SessionManager {
     async createSession(userId, userData, method = 'qr') {
         try {
             const access = await this.authManager.checkUserAccess(userId);
+            const trial = await this.trialManager.checkTrialAccess(userId);
             
-            if (!access.hasAccess) {
-                throw new Error(`Accès refusé. Aucun abonnement actif.`);
+            const hasAccess = access.hasAccess || trial.hasTrial;
+            
+            if (!hasAccess) {
+                // Créer un essai automatique pour les nouveaux utilisateurs
+                const newTrial = await this.trialManager.createTrialSession(userId, userData);
+                if (!newTrial.success) {
+                    throw new Error(`Accès refusé. ${newTrial.error}`);
+                }
             }
 
-            if (access.hasAccess) {
+            const isTrial = !access.hasAccess;
+            
+            if (hasAccess && !isTrial) {
                 const existingSession = await this.getUserActiveSession(userId);
                 if (existingSession && existingSession.status === 'connected') {
-                    log.info(`🔄 Session existante réutilisée pour ${userId} (Payant)`);
+                    log.info(`🔄 Session existante réutilisée pour ${userId} (${isTrial ? 'Essai' : 'Payant'})`);
                     await this.updateSessionActivity(existingSession.session_id);
                     
                     return {
                         sessionId: existingSession.session_id,
                         method: existingSession.connection_method || 'qr',
                         existing: true,
-                        persistent: true
+                        persistent: !isTrial,
+                        isTrial: isTrial
                     };
                 }
             }
 
             if (method === 'pairing') {
-                log.info(`🔐 Création session pairing pour ${userId}`);
+                log.info(`🔐 Création session pairing pour ${userId} (${isTrial ? 'Essai' : 'Payant'})`);
                 return await this.pairingManager.initializePairing(userId, userData);
             } else {
-                log.info(`📱 Création session QR pour ${userId}`);
-                return await this.createQRSession(userId, userData, access.hasAccess);
+                log.info(`📱 Création session QR pour ${userId} (${isTrial ? 'Essai' : 'Payant'})`);
+                return await this.createQRSession(userId, userData, !isTrial);
             }
             
         } catch (error) {
             log.error('❌ Erreur création session:', error);
+            throw error;
+        }
+    }
+
+    async createSessionWithPhone(userId, userData, method, phoneNumber) {
+        try {
+            const access = await this.authManager.checkUserAccess(userId);
+            const trial = await this.trialManager.checkTrialAccess(userId);
+            
+            const hasAccess = access.hasAccess || trial.hasTrial;
+            
+            if (!hasAccess) {
+                const newTrial = await this.trialManager.createTrialSession(userId, userData);
+                if (!newTrial.success) {
+                    throw new Error(`Accès refusé. ${newTrial.error}`);
+                }
+            }
+
+            const isTrial = !access.hasAccess;
+            
+            if (method === 'pairing' && phoneNumber) {
+                log.info(`🔐 Création session pairing pour ${userId}`);
+                // 🔒 Le numéro est passé mais ne sera pas sauvegardé
+                return await this.pairingManager.initializePairing(userId, userData, phoneNumber);
+            } else {
+                throw new Error('Méthode ou numéro invalide');
+            }
+            
+        } catch (error) {
+            log.error('❌ Erreur création session avec phone:', error);
             throw error;
         }
     }
@@ -117,7 +159,6 @@ class SessionManager {
             
             const sock = makeWASocket({
                 auth: state,
-                printQRInTerminal: true,
                 logger: P({ level: "silent" }),
                 browser: ['Chrome (Linux)', '', ''],
                 syncFullHistory: false,
@@ -224,17 +265,17 @@ class SessionManager {
             });
 
             if (this.telegramBot) {
-                let message = `✅ *Connexion WhatsApp Réussie!*\n\n`;
-                message += `Utilisateur: ${user.name || user.id}\n`;
-                message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\n`;
+                let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
+                message += `Utilisateur: ${user.name || user.id}\\n`;
+                message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\\n`;
                 
                 if (session.subscriptionActive) {
                     const access = await this.authManager.checkUserAccess(userId);
-                    message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\n`;
-                    message += `\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
+                    message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\\n`;
+                    message += `\\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
                 }
                 
-                message += `\n\nVous pouvez maintenant utiliser le bot!`;
+                message += `\\n\\nVous pouvez maintenant utiliser le bot!`;
 
                 await this.telegramBot.sendMessage(userId, message);
             }
@@ -952,4 +993,4 @@ Fuseau: UTC+1 (Afrique/Douala)`;
     }
 }
 
-module.exports = SessionManager; 
+module.exports = SessionManager;

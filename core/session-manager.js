@@ -213,7 +213,12 @@ class SessionManager {
                 await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
                 
                 if (this.telegramBot) {
-                    await this.telegramBot.sendQRCode(userId, qr, sessionId);
+                    try{
+                        await this.telegramBot.sendQRCode(userId, qr, sessionId);
+                        log.success(`✅ QR code envoyé à ${userId}`);
+    					} catch (error) {
+        						log.error(`❌ Erreur envoi QR code à ${userId}:`, error);
+                    } 
                 }
             }
 

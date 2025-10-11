@@ -366,13 +366,13 @@ Veuillez entrer votre numéro de téléphone WhatsApp:
 • Exemple: 237612345678 pour le Cameroun
 
 🔒 Confidentialité:
-• Votre numéro est utilisé UNIQUEMENT pour générer le code
-• Il n'est JAMAIS sauvegardé dans notre base de données
-• Il est supprimé immédiatement après utilisation
+   • Votre numéro est utilisé UNIQUEMENT pour générer le code
+   • Il n'est JAMAIS sauvegardé dans notre base de données
+   • Il est supprimé immédiatement après utilisation
 
 ⚠️ Important:
-• Utilisez le même numéro que sur votre téléphone
-• Le numéro doit être actif et avoir WhatsApp
+   • Utilisez le même numéro que sur votre téléphone
+   • Le numéro doit être actif et avoir WhatsApp
             """),
             parse_mode='MarkdownV2',
             reply_markup=ReplyKeyboardRemove()

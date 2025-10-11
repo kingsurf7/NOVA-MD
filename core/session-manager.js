@@ -213,12 +213,21 @@ class SessionManager {
                 await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
                 
                 if (this.telegramBot) {
-                    try{
+                    try {
                         await this.telegramBot.sendQRCode(userId, qr, sessionId);
                         log.success(`✅ QR code envoyé à ${userId}`);
-    					} catch (error) {
-        						log.error(`❌ Erreur envoi QR code à ${userId}:`, error);
-                    } 
+                    } catch (error) {
+                        log.error(`❌ Erreur envoi QR code à ${userId}:`, error);
+                        // Fallback: envoyer le code en texte
+                        try {
+                            await this.telegramBot.sendMessage(
+                                userId, 
+                                `📱 QR Code: ${qr}\n\nScannez ce code dans WhatsApp → Paramètres → Appareils liés`
+                            );
+                        } catch (fallbackError) {
+                            log.error(`❌ Erreur fallback QR code:`, fallbackError);
+                        }
+                    }
                 }
             }
 
@@ -282,7 +291,12 @@ class SessionManager {
                 
                 message += `\\n\\nVous pouvez maintenant utiliser le bot!`;
 
-                await this.telegramBot.sendMessage(userId, message);
+                try {
+                    await this.telegramBot.sendMessage(userId, message);
+                    log.success(`✅ Message de connexion envoyé à ${userId}`);
+                } catch (error) {
+                    log.error(`❌ Erreur envoi message à ${userId}:`, error);
+                }
             }
 
             log.success(`🎯 Session ${sessionId} complètement initialisée`);
@@ -614,7 +628,11 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                     }
                 }
 
-                await this.telegramBot.sendMessage(session.userId, message);
+                try {
+                    await this.telegramBot.sendMessage(session.userId, message);
+                } catch (error) {
+                    log.error(`❌ Erreur envoi message déconnexion à ${session.userId}:`, error);
+                }
             }
 
             if (!session?.subscriptionActive) {
@@ -633,10 +651,14 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             log.info(`🔄 Tentative de reconnexion pour ${sessionId}`);
             
             if (this.telegramBot) {
-                await this.telegramBot.sendMessage(
-                    session.userId,
-                    "🔄 *Reconnexion automatique en cours...*"
-                );
+                try {
+                    await this.telegramBot.sendMessage(
+                        session.userId,
+                        "🔄 *Reconnexion automatique en cours...*"
+                    );
+                } catch (error) {
+                    log.error(`❌ Erreur envoi message reconnexion à ${session.userId}:`, error);
+                }
             }
 
             await this.createSession(session.userId, session.userData, session.connectionMethod);
@@ -645,10 +667,14 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             log.error(`❌ Échec reconnexion ${sessionId}:`, error);
             
             if (this.telegramBot) {
-                await this.telegramBot.sendMessage(
-                    session.userId,
-                    "❌ *Échec reconnexion automatique*\n\nUtilisez /connect pour vous reconnecter manuellement."
-                );
+                try {
+                    await this.telegramBot.sendMessage(
+                        session.userId,
+                        "❌ *Échec reconnexion automatique*\n\nUtilisez /connect pour vous reconnecter manuellement."
+                    );
+                } catch (error) {
+                    log.error(`❌ Erreur envoi message échec reconnexion à ${session.userId}:`, error);
+                }
             }
         }
     }

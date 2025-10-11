@@ -28,6 +28,12 @@ class NovaMDApp {
     
     async initialize() {
         await this.commandHandler.loadBuiltInCommands();
+        
+        // Attendre que le bot Telegram soit configuré
+        if (!this.sessionManager.telegramBot) {
+            log.warn('⚠️  Bot Telegram non encore configuré');
+        }
+        
         log.success("🚀 NOVA-MD initialisé avec sessions persistantes");
         
         this.setupBackgroundServices();
@@ -349,11 +355,6 @@ class NovaMDApp {
                 message: error.message
             });
         });
-    }
-
-    setTelegramBot(bot) {
-        this.sessionManager.setTelegramBot(bot);
-        this.updateManager = new SimpleUpdateManager(bot, this.sessionManager);
     }
 
     start() {

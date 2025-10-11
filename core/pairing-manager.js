@@ -110,42 +110,54 @@ class PairingManager {
       });
 
       // Générer directement le code avec le numéro fourni
-      setTimeout(async () => {
-        try {
-          let code = await socket.requestPairingCode(phoneNumber);
-          code = code?.match(/.{1,4}/g)?.join("-") || code;
-          
-          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}`);
-          // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
-          
-          if (this.sessionManager.telegramBot) {
-            try {
-              await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
-              log.success(`✅ Code de pairing envoyé à l'utilisateur ${userId}`);
-            } catch (error) {
-              log.error(`❌ Erreur envoi code à ${userId}:`, error);
-              // Fallback
+      let pairingCodeSent = false;
+      
+      const pairingTimeout = setTimeout(async () => {
+        if (!pairingCodeSent) {
+          try {
+            let code = await socket.requestPairingCode(phoneNumber);
+            code = code?.match(/.{1,4}/g)?.join("-") || code;
+            
+            log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code}`);
+            
+            if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendPairingCode) {
+              try {
+                await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+                log.success(`✅ Code de pairing envoyé à l'utilisateur ${userId}`);
+                pairingCodeSent = true;
+              } catch (error) {
+                log.error(`❌ Erreur envoi code pairing à ${userId}:`, error);
+                // Fallback avec message simple
+                if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendMessage) {
+                  try {
+                    await this.sessionManager.telegramBot.sendMessage(
+                      userId,
+                      `🔐 Votre code de pairing: ${code}\n\nEntrez ce code dans WhatsApp → Paramètres → Appareils liés`
+                    );
+                    log.success(`✅ Code de pairing envoyé en texte à ${userId}`);
+                    pairingCodeSent = true;
+                  } catch (fallbackError) {
+                    log.error(`❌ Erreur fallback pairing texte:`, fallbackError);
+                  }
+                }
+              }
+            } else {
+              log.error(`❌ TelegramBot non disponible pour l'envoi pairing à ${userId}`);
+              // Dernier fallback - log le code
+              log.info(`🔐 CODE DE PAIRING POUR ${userId}: ${code}`);
+            }
+
+          } catch (error) {
+            log.error('❌ Erreur génération code pairing:', error);
+            if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendMessage) {
               try {
                 await this.sessionManager.telegramBot.sendMessage(
                   userId,
-                  `🔐 Votre code de pairing: ${code}\n\nEntrez ce code dans WhatsApp → Paramètres → Appareils liés`
+                  "❌ Erreur lors de la génération du code pairing. Réessayez."
                 );
-              } catch (fallbackError) {
-                log.error(`❌ Erreur fallback pairing:`, fallbackError);
+              } catch (sendError) {
+                log.error(`❌ Erreur envoi message erreur à ${userId}:`, sendError);
               }
-            }
-          }
-
-        } catch (error) {
-          log.error('❌ Erreur génération code pairing:', error);
-          if (this.sessionManager.telegramBot) {
-            try {
-              await this.sessionManager.telegramBot.sendMessage(
-                userId,
-                "❌ Erreur lors de la génération du code. Réessayez."
-              );
-            } catch (sendError) {
-              log.error(`❌ Erreur envoi message erreur à ${userId}:`, sendError);
             }
           }
         }
@@ -155,10 +167,12 @@ class PairingManager {
         const { connection, lastDisconnect } = update;
         
         if (connection === "open") {
+          clearTimeout(pairingTimeout);
           log.success(`✅ Connexion WhatsApp réussie via pairing pour ${userId}`);
           await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
           
         } else if (connection === "close") {
+          clearTimeout(pairingTimeout);
           await this.handleConnectionClose(null, lastDisconnect, userId, null);
         }
       });
@@ -196,12 +210,19 @@ class PairingManager {
           let code = await socket.requestPairingCode(phoneNumber);
           code = code?.match(/.{1,4}/g)?.join("-") || code;
           
-          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}`);
+          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code}`);
           // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
           
           if (this.sessionManager.telegramBot) {
             try {
-              await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+              if (this.sessionManager.telegramBot.sendPairingCode) {
+                await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+              } else if (this.sessionManager.telegramBot.sendMessage) {
+                await this.sessionManager.telegramBot.sendMessage(
+                  userId,
+                  `🔐 Votre code de pairing: ${code}\n\nEntrez ce code dans WhatsApp`
+                );
+              }
             } catch (error) {
               log.error(`❌ Erreur envoi code pairing à ${userId}:`, error);
             }
@@ -214,7 +235,7 @@ class PairingManager {
 
         } catch (error) {
           log.error('❌ Erreur génération code pairing:', error);
-          if (this.sessionManager.telegramBot) {
+          if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendMessage) {
             try {
               await this.sessionManager.telegramBot.sendMessage(
                 userId,
@@ -276,7 +297,7 @@ class PairingManager {
       this.activePairings.delete(userId);
       if (rl) rl.close();
 
-      if (this.sessionManager.telegramBot) {
+      if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendMessage) {
         let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
         message += `Méthode: Code de Pairing\\n`;
         message += `Compte: ${socket.user?.name || socket.user?.id}\\n`;
@@ -288,6 +309,7 @@ class PairingManager {
 
         try {
           await this.sessionManager.telegramBot.sendMessage(userId, message);
+          log.success(`✅ Message de succès pairing envoyé à ${userId}`);
         } catch (error) {
           log.error(`❌ Erreur envoi message succès à ${userId}:`, error);
         }
@@ -308,7 +330,7 @@ class PairingManager {
       log.info("🔄 Tentative de reconnexion pairing...");
       await this.cleanup();
       
-      if (this.sessionManager.telegramBot) {
+      if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendMessage) {
         try {
           await this.sessionManager.telegramBot.sendMessage(
             userId,
@@ -320,7 +342,7 @@ class PairingManager {
       }
     } else {
       log.error("❌ Pairing échoué - erreur d'authentification");
-      if (this.sessionManager.telegramBot) {
+      if (this.sessionManager.telegramBot && this.sessionManager.telegramBot.sendMessage) {
         try {
           await this.sessionManager.telegramBot.sendMessage(
             userId,

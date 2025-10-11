@@ -24,6 +24,7 @@ class SessionManager {
     setTelegramBot(bot) {
         this.telegramBot = bot;
         this.pairingManager.sessionManager.telegramBot = bot;
+        log.success('✅ Bot Telegram configuré dans SessionManager');
     }
 
     async loadUserSettings() {
@@ -152,6 +153,19 @@ class SessionManager {
 
     async createQRSession(userId, userData, isPayedUser = false) {
         try {
+            // Test d'envoi de message simple
+            if (this.telegramBot && this.telegramBot.sendMessage) {
+                try {
+                    await this.telegramBot.sendMessage(
+                        userId,
+                        "🔄 Création de votre session WhatsApp..."
+                    );
+                    log.success(`✅ Message test envoyé à ${userId}`);
+                } catch (error) {
+                    log.error(`❌ Impossible d'envoyer message test à ${userId}:`, error);
+                }
+            }
+
             const sessionId = `qr_${userId}_${Date.now()}`;
             const authDir = `./sessions/${sessionId}`;
 
@@ -212,21 +226,36 @@ class SessionManager {
                 log.info(`📱 QR généré pour ${userId}`);
                 await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
                 
-                if (this.telegramBot) {
+                if (this.telegramBot && this.telegramBot.sendQRCode) {
                     try {
                         await this.telegramBot.sendQRCode(userId, qr, sessionId);
                         log.success(`✅ QR code envoyé à ${userId}`);
                     } catch (error) {
                         log.error(`❌ Erreur envoi QR code à ${userId}:`, error);
-                        // Fallback: envoyer le code en texte
+                        // Fallback: envoyer le message d'erreur
                         try {
-                            await this.telegramBot.sendMessage(
-                                userId, 
-                                `📱 QR Code: ${qr}\n\nScannez ce code dans WhatsApp → Paramètres → Appareils liés`
-                            );
+                            if (this.telegramBot.sendMessage) {
+                                await this.telegramBot.sendMessage(
+                                    userId, 
+                                    `❌ Erreur lors de l'envoi du QR code. Code texte: ${qr}`
+                                );
+                            }
                         } catch (fallbackError) {
                             log.error(`❌ Erreur fallback QR code:`, fallbackError);
                         }
+                    }
+                } else {
+                    log.error(`❌ TelegramBot non disponible pour l'envoi QR à ${userId}`);
+                    // Fallback urgent
+                    try {
+                        if (this.telegramBot && this.telegramBot.sendMessage) {
+                            await this.telegramBot.sendMessage(
+                                userId,
+                                `📱 QR Code: ${qr}\n\nScannez ce code dans WhatsApp → Paramètres → Appareils liés`
+                            );
+                        }
+                    } catch (error) {
+                        log.error(`❌ Impossible d'envoyer QR en texte à ${userId}:`, error);
                     }
                 }
             }
@@ -278,7 +307,7 @@ class SessionManager {
                 connected_at: new Date().toISOString()
             });
 
-            if (this.telegramBot) {
+            if (this.telegramBot && this.telegramBot.sendMessage) {
                 let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
                 message += `Utilisateur: ${user.name || user.id}\\n`;
                 message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\\n`;
@@ -610,7 +639,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
 
             await this.updateSessionStatus(sessionId, 'disconnected', disconnectData);
             
-            if (session && this.telegramBot) {
+            if (session && this.telegramBot && this.telegramBot.sendMessage) {
                 let message = '❌ *Déconnexion WhatsApp*\n\n';
                 
                 if (reason?.output?.statusCode === 401) {
@@ -650,7 +679,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         try {
             log.info(`🔄 Tentative de reconnexion pour ${sessionId}`);
             
-            if (this.telegramBot) {
+            if (this.telegramBot && this.telegramBot.sendMessage) {
                 try {
                     await this.telegramBot.sendMessage(
                         session.userId,
@@ -666,7 +695,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         } catch (error) {
             log.error(`❌ Échec reconnexion ${sessionId}:`, error);
             
-            if (this.telegramBot) {
+            if (this.telegramBot && this.telegramBot.sendMessage) {
                 try {
                     await this.telegramBot.sendMessage(
                         session.userId,

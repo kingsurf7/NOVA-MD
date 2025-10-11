@@ -16,6 +16,7 @@ class SessionManager {
         this.sessions = new Map();
         this.userSettings = new Map();
         this.telegramBot = null;
+        this.nodeApiUrl = process.env.NODE_API_URL || 'http://localhost:3000';
         
         this.loadUserSettings();
         this.setupSessionMaintenance();
@@ -25,28 +26,6 @@ class SessionManager {
         this.telegramBot = bot;
         this.pairingManager.sessionManager.telegramBot = bot;
         log.success('✅ Bot Telegram configuré dans SessionManager');
-        
-        // Vérifier que le bot est opérationnel
-        this.checkTelegramBot();
-    }
-
-    checkTelegramBot() {
-        if (!this.telegramBot) {
-            log.error('❌ TelegramBot non configuré');
-            return false;
-        }
-        
-        // Vérifier que les méthodes nécessaires existent
-        const requiredMethods = ['sendMessage'];
-        for (const method of requiredMethods) {
-            if (typeof this.telegramBot[method] !== 'function') {
-                log.error(`❌ Méthode ${method} manquante dans TelegramBot`);
-                return false;
-            }
-        }
-        
-        log.success('✅ TelegramBot vérifié et opérationnel');
-        return true;
     }
 
     async loadUserSettings() {
@@ -176,14 +155,8 @@ class SessionManager {
     async createQRSession(userId, userData, isPayedUser = false) {
         try {
             // Test d'envoi de message simple
-            if (this.telegramBot) {
-                try {
-                    await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
-                    log.success(`✅ Message test envoyé à ${userId}`);
-                } catch (error) {
-                    log.error(`❌ Impossible d'envoyer message test à ${userId}:`, error);
-                }
-            }
+            await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
+            log.success(`✅ Message test envoyé à ${userId}`);
 
             const sessionId = `qr_${userId}_${Date.now()}`;
             const authDir = `./sessions/${sessionId}`;
@@ -245,7 +218,7 @@ class SessionManager {
                 log.info(`📱 QR généré pour ${userId}`);
                 await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
                 
-                // Utiliser la nouvelle méthode d'envoi QR
+                // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
                 await this.sendQRCode(userId, qr, sessionId);
             }
 
@@ -296,26 +269,20 @@ class SessionManager {
                 connected_at: new Date().toISOString()
             });
 
-            if (this.telegramBot) {
-                let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
-                message += `Utilisateur: ${user.name || user.id}\\n`;
-                message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\\n`;
-                
-                if (session.subscriptionActive) {
-                    const access = await this.authManager.checkUserAccess(userId);
-                    message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\\n`;
-                    message += `\\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
-                }
-                
-                message += `\\n\\nVous pouvez maintenant utiliser le bot!`;
-
-                try {
-                    await this.sendMessage(userId, message);
-                    log.success(`✅ Message de connexion envoyé à ${userId}`);
-                } catch (error) {
-                    log.error(`❌ Erreur envoi message à ${userId}:`, error);
-                }
+            let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
+            message += `Utilisateur: ${user.name || user.id}\\n`;
+            message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\\n`;
+            
+            if (session.subscriptionActive) {
+                const access = await this.authManager.checkUserAccess(userId);
+                message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\\n`;
+                message += `\\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
             }
+            
+            message += `\\n\\nVous pouvez maintenant utiliser le bot!`;
+
+            await this.sendMessage(userId, message);
+            log.success(`✅ Message de connexion envoyé à ${userId}`);
 
             log.success(`🎯 Session ${sessionId} complètement initialisée`);
 
@@ -562,65 +529,96 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         }
     }
 
-    // NOUVELLES MÉTHODES DE COMMUNICATION AVEC TELEGRAM
+    // =========================================================================
+    // NOUVELLES MÉTHODES PONT HTTP - Communication avec Telegram via API
+    // =========================================================================
+
     async sendQRCode(userId, qrCode, sessionId) {
-        if (!this.telegramBot) {
-            log.error(`❌ TelegramBot non disponible pour l'envoi QR à ${userId}`);
-            return false;
-        }
-        
         try {
-            // Utiliser la méthode du bot Python pour envoyer le QR
-            if (this.telegramBot.sendQRCode) {
-                return await this.telegramBot.sendQRCode(userId, qrCode, sessionId);
+            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-qr`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    qr_code: qrCode,
+                    session_id: sessionId
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                log.success(`✅ QR code envoyé à ${userId} via pont HTTP`);
+                return true;
             } else {
-                // Fallback: envoyer le code en texte
-                return await this.telegramBot.sendMessage(
-                    userId, 
-                    `📱 QR Code: ${qrCode}\n\nScannez ce code dans WhatsApp → Paramètres → Appareils liés`
-                );
+                log.error(`❌ Échec envoi QR à ${userId}:`, result.error);
+                return false;
             }
+            
         } catch (error) {
-            log.error(`❌ Erreur envoi QR code à ${userId}:`, error);
+            log.error(`❌ Erreur envoi QR à ${userId} via HTTP:`, error.message);
             return false;
         }
     }
 
     async sendPairingCode(userId, pairingCode, phoneNumber) {
-        if (!this.telegramBot) {
-            log.error(`❌ TelegramBot non disponible pour l'envoi pairing à ${userId}`);
-            return false;
-        }
-        
         try {
-            if (this.telegramBot.sendPairingCode) {
-                return await this.telegramBot.sendPairingCode(userId, pairingCode, phoneNumber);
+            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-pairing`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    pairing_code: pairingCode,
+                    phone_number: phoneNumber
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                log.success(`✅ Code pairing envoyé à ${userId} via pont HTTP`);
+                return true;
             } else {
-                // Fallback: envoyer le code en texte
-                return await this.telegramBot.sendMessage(
-                    userId,
-                    `🔐 Code de Pairing: ${pairingCode}\n\nEntrez ce code dans WhatsApp → Paramètres → Appareils liés`
-                );
+                log.error(`❌ Échec envoi pairing à ${userId}:`, result.error);
+                return false;
             }
+            
         } catch (error) {
-            log.error(`❌ Erreur envoi pairing code à ${userId}:`, error);
+            log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message);
             return false;
         }
     }
 
     async sendMessage(userId, message) {
-        if (!this.telegramBot) {
-            log.error(`❌ TelegramBot non disponible pour l'envoi message à ${userId}`);
-            return false;
-        }
-        
         try {
-            return await this.telegramBot.sendMessage(userId, message);
+            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    message: message
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                log.success(`✅ Message envoyé à ${userId} via pont HTTP`);
+                return true;
+            } else {
+                log.error(`❌ Échec envoi message à ${userId}:`, result.error);
+                return false;
+            }
+            
         } catch (error) {
-            log.error(`❌ Erreur envoi message à ${userId}:`, error);
+            log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message);
             return false;
         }
     }
+
+    // =========================================================================
+    // Méthodes existantes (inchangées)
+    // =========================================================================
 
     async updateSessionStatus(sessionId, status, data = {}) {
         try {
@@ -688,7 +686,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
 
             await this.updateSessionStatus(sessionId, 'disconnected', disconnectData);
             
-            if (session && this.telegramBot) {
+            if (session) {
                 let message = '❌ *Déconnexion WhatsApp*\n\n';
                 
                 if (reason?.output?.statusCode === 401) {
@@ -728,15 +726,13 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         try {
             log.info(`🔄 Tentative de reconnexion pour ${sessionId}`);
             
-            if (this.telegramBot) {
-                try {
-                    await this.sendMessage(
-                        session.userId,
-                        "🔄 *Reconnexion automatique en cours...*"
-                    );
-                } catch (error) {
-                    log.error(`❌ Erreur envoi message reconnexion à ${session.userId}:`, error);
-                }
+            try {
+                await this.sendMessage(
+                    session.userId,
+                    "🔄 *Reconnexion automatique en cours...*"
+                );
+            } catch (error) {
+                log.error(`❌ Erreur envoi message reconnexion à ${session.userId}:`, error);
             }
 
             await this.createSession(session.userId, session.userData, session.connectionMethod);
@@ -744,15 +740,13 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         } catch (error) {
             log.error(`❌ Échec reconnexion ${sessionId}:`, error);
             
-            if (this.telegramBot) {
-                try {
-                    await this.sendMessage(
-                        session.userId,
-                        "❌ *Échec reconnexion automatique*\n\nUtilisez /connect pour vous reconnecter manuellement."
-                    );
-                } catch (error) {
-                    log.error(`❌ Erreur envoi message échec reconnexion à ${session.userId}:`, error);
-                }
+            try {
+                await this.sendMessage(
+                    session.userId,
+                    "❌ *Échec reconnexion automatique*\n\nUtilisez /connect pour vous reconnecter manuellement."
+                );
+            } catch (error) {
+                log.error(`❌ Erreur envoi message échec reconnexion à ${session.userId}:`, error);
             }
         }
     }

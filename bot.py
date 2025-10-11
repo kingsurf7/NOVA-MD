@@ -177,6 +177,103 @@ Important:
         
         context.user_data['waiting_for_code'] = True
 
+	async def send_qr_code(self, chat_id, qr_data, session_id):
+		"""Envoyer le QR code à l'utilisateur"""
+		try:
+    		# Générer l'image QR code
+    		qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+    		)
+    		qr.add_data(qr_data)
+    		qr.make(fit=True)
+
+    		img = qr.make_image(fill_color="black", back_color="white")
+        
+    		# Convertir en bytes
+    		img_buffer = io.BytesIO()
+    		img.save(img_buffer, format='PNG')
+    		img_buffer.seek(0)
+
+    		# Préparer le message
+    		instructions = self.escape_markdown(f"""
+📱 Connexion WhatsApp - QR Code
+
+1. Ouvrez WhatsApp → Paramètres
+2. Appareils liés → Lier un appareil  
+3. Scannez le QR code ci-dessous
+4. Attendez la confirmation
+
+🔐 SESSION PERMANENTE
+Votre session restera active automatiquement
+
+⏱️ Le QR expire dans 2 minutes
+        """)
+
+    		# Envoyer d'abord les instructions
+    		await self.application.bot.send_message(
+            chat_id=chat_id,
+            text=instructions,
+            parse_mode='MarkdownV2'
+        )
+
+    		# Ensuite envoyer l'image QR code
+    		await self.application.bot.send_photo(
+            chat_id=chat_id,
+            photo=img_buffer,
+            caption="Scannez ce QR code avec WhatsApp 📲"
+    		)
+        
+    		logger.info(f"✅ QR Code envoyé à {chat_id} - Session: {session_id}")
+        
+		except Exception as e:
+    		logger.error(f"❌ Erreur envoi QR code: {e}")
+    		# Fallback: envoyer le texte du QR code
+    	try:
+        	await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=self.escape_markdown(f"❌ Impossible de générer l'image QR\n\nCode texte: `{qr_data}`\n\nCopiez ce code manuellement dans WhatsApp"),
+                parse_mode='MarkdownV2'
+            )
+		except Exception as fallback_error:
+    		logger.error(f"❌ Erreur fallback QR code: {fallback_error}")
+
+
+	async def send_pairing_code(self, chat_id, code, phone_number):
+		"""Envoyer le code de pairing à l'utilisateur"""
+		try:
+    		pairing_text = self.escape_markdown(f"""
+🔐 Connexion par Code de Pairing
+
+📱 Votre code de pairing:
+`{code}`
+
+Instructions:
+1. Ouvrez WhatsApp sur votre téléphone
+2. Allez dans Paramètres → Appareils liés 
+3. Sélectionnez Lier un appareil
+4. Entrez le code ci-dessus
+5. Attendez la confirmation
+
+⏱️ Ce code expire dans 5 minutes
+
+La connexion se fera automatiquement!
+        """)
+        
+    		await self.application.bot.send_message(
+            chat_id=chat_id,
+            text=pairing_text,
+            parse_mode='MarkdownV2'
+        )
+    		logger.info(f"✅ Code de pairing envoyé à {chat_id}: {code}")
+        
+		except Exception as e:
+    		logger.error(f"❌ Erreur envoi code pairing: {e}")
+
+
+    
     async def subscribe_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscribe_text = self.escape_markdown(f"""
 💎 Abonnement NOVA-MD Premium

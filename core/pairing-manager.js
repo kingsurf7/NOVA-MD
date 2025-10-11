@@ -119,7 +119,12 @@ class PairingManager {
           // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
           
           if (this.sessionManager.telegramBot) {
-            await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+            try{
+              await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+              log.success(`✅ Code de pairing envoyé à l'utilisateur ${userId}`);
+               } catch (error) {
+                        log.error(`❌ Erreur envoi code à ${userId}:`, error);
+            }
           }
 
         } catch (error) {

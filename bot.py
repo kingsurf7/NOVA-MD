@@ -9,12 +9,15 @@ import qrcode
 import io
 from datetime import datetime, timedelta
 import re
+import threading
+from aiohttp import web
 
 # Configuration
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_IDS = [int(x) for x in os.getenv('TELEGRAM_ADMIN_IDS', '').split(',') if x]
 NODE_API_URL = os.getenv('NODE_API_URL', 'http://localhost:3000')
 SUPPORT_CONTACT = "@Nova_king0"
+BOT_API_PORT = int(os.getenv('BOT_API_PORT', '3001'))
 
 # Setup logging
 logging.basicConfig(
@@ -23,10 +26,180 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class HTTPBridge:
+    """Pont HTTP pour recevoir les messages du serveur Node.js"""
+    def __init__(self, bot_instance):
+        self.bot = bot_instance
+        self.app = web.Application()
+        self.setup_routes()
+        self.runner = None
+        self.site = None
+        
+    def setup_routes(self):
+        """Configurer les routes HTTP"""
+        self.app.router.add_post('/webhook/send-message', self.handle_send_message)
+        self.app.router.add_post('/webhook/send-qr', self.handle_send_qr)
+        self.app.router.add_post('/webhook/send-pairing', self.handle_send_pairing)
+        self.app.router.add_get('/health', self.handle_health)
+        
+    async def handle_send_message(self, request):
+        """Recevoir un message à envoyer via Telegram"""
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            message = data.get('message')
+            
+            if not user_id or not message:
+                return web.json_response({'success': False, 'error': 'Données manquantes'}, status=400)
+            
+            logger.info(f"📨 Message reçu pour {user_id}: {message[:50]}...")
+            
+            # Envoyer le message via Telegram
+            success = await self.bot.send_direct_message(user_id, message)
+            
+            return web.json_response({
+                'success': success,
+                'user_id': user_id,
+                'delivered': success,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement message: {e}")
+            return web.json_response({'success': False, 'error': str(e)}, status=500)
+    
+    async def handle_send_qr(self, request):
+        """Recevoir un QR code à envoyer via Telegram"""
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            qr_code = data.get('qr_code')
+            session_id = data.get('session_id')
+            
+            if not user_id or not qr_code:
+                return web.json_response({'success': False, 'error': 'Données manquantes'}, status=400)
+            
+            logger.info(f"📱 QR reçu pour {user_id} (session: {session_id})")
+            
+            # Envoyer le QR code via Telegram
+            success = await self.bot.send_qr_code(user_id, qr_code, session_id)
+            
+            return web.json_response({
+                'success': success,
+                'user_id': user_id,
+                'session_id': session_id,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement QR: {e}")
+            return web.json_response({'success': False, 'error': str(e)}, status=500)
+    
+    async def handle_send_pairing(self, request):
+        """Recevoir un code de pairing à envoyer via Telegram"""
+        try:
+            data = await request.json()
+            user_id = data.get('user_id')
+            pairing_code = data.get('pairing_code')
+            phone_number = data.get('phone_number')
+            
+            if not user_id or not pairing_code:
+                return web.json_response({'success': False, 'error': 'Données manquantes'}, status=400)
+            
+            logger.info(f"🔐 Pairing reçu pour {user_id}: {pairing_code}")
+            
+            # Envoyer le code de pairing via Telegram
+            success = await self.bot.send_pairing_code(user_id, pairing_code, phone_number)
+            
+            return web.json_response({
+                'success': success,
+                'user_id': user_id,
+                'pairing_code': pairing_code,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement pairing: {e}")
+            return web.json_response({'success': False, 'error': str(e)}, status=500)
+    
+    async def handle_health(self, request):
+        """Endpoint de santé"""
+        return web.json_response({
+            'status': 'healthy',
+            'service': 'telegram_bot_bridge',
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    async def start(self):
+        """Démarrer le serveur HTTP"""
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        self.site = web.TCPSite(self.runner, 'localhost', BOT_API_PORT)
+        await self.site.start()
+        logger.info(f"🌉 Pont HTTP démarré sur le port {BOT_API_PORT}")
+    
+    async def stop(self):
+        """Arrêter le serveur HTTP"""
+        if self.site:
+            await self.site.stop()
+        if self.runner:
+            await self.cleanup()
+        logger.info("🌉 Pont HTTP arrêté")
+    
+    async def cleanup(self):
+        """Nettoyer les ressources"""
+        await self.runner.cleanup()
+
+class NodeJSConnector:
+    """Connecteur vers le serveur Node.js"""
+    def __init__(self):
+        self.node_api_url = NODE_API_URL
+        self.connected = False
+        
+    async def connect_to_nodejs(self):
+        """Se connecter au serveur Node.js"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.node_api_url}/health") as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get('status') == 'healthy':
+                            logger.info("✅ Connecté au serveur Node.js")
+                            self.connected = True
+                            
+                            # S'enregistrer auprès du serveur Node.js
+                            await self.register_bot()
+                            return True
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erreur connexion Node.js: {e}")
+            return False
+    
+    async def register_bot(self):
+        """S'enregistrer auprès du serveur Node.js"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{self.node_api_url}/api/bot/connect", json={
+                    'bot_available': True,
+                    'methods': ['sendMessage', 'sendQRCode', 'sendPairingCode'],
+                    'webhook_url': f'http://localhost:{BOT_API_PORT}/webhook'
+                }) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get('success'):
+                            logger.info("🤖 Bot enregistré auprès du serveur Node.js")
+                        else:
+                            logger.warning("⚠️  Échec enregistrement bot")
+                    else:
+                        logger.warning("⚠️  Impossible de s'enregistrer auprès du serveur Node.js")
+        except Exception as e:
+            logger.error(f"❌ Erreur enregistrement bot: {e}")
 
 class NovaMDTelegramBot:
     def __init__(self):
         self.application = Application.builder().token(TOKEN).build()
+        self.http_bridge = HTTPBridge(self)
+        self.node_connector = NodeJSConnector()
         self.setup_handlers()
         
     def setup_handlers(self):
@@ -1076,7 +1249,127 @@ Pour plus de détails: /stats
         else:
             await update.message.reply_text("❌ Aucun utilisateur actif trouvé.")
 
-    # Méthodes d'API pour communiquer avec le serveur Node.js
+    # =========================================================================
+    # MÉTHODES POUR LE PONT HTTP - Appelées par le serveur HTTP
+    # =========================================================================
+
+    async def send_direct_message(self, user_id, message):
+        """Envoyer un message directement via Telegram"""
+        try:
+            await self.application.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"✅ Message envoyé à {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Erreur envoi message à {user_id}: {e}")
+            return False
+
+    async def send_qr_code(self, user_id, qr_code, session_id):
+        """Envoyer un QR code via Telegram"""
+        try:
+            # Générer l'image QR code
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=10,
+                border=4,
+            )
+            qr.add_data(qr_code)
+            qr.make(fit=True)
+
+            img = qr.make_image(fill_color="black", back_color="white")
+        
+            # Convertir en bytes
+            img_buffer = io.BytesIO()
+            img.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
+
+            # Préparer le message
+            instructions = self.escape_markdown(f"""
+📱 Connexion WhatsApp - QR Code
+
+1. Ouvrez WhatsApp → Paramètres
+2. Appareils liés → Lier un appareil  
+3. Scannez le QR code ci-dessous
+4. Attendez la confirmation
+
+🔐 SESSION PERMANENTE
+Votre session restera active automatiquement
+
+⏱️ Le QR expire dans 2 minutes
+            """)
+
+            # Envoyer d'abord les instructions
+            await self.application.bot.send_message(
+                chat_id=user_id,
+                text=instructions,
+                parse_mode='MarkdownV2'
+            )
+
+            # Ensuite envoyer l'image QR code
+            await self.application.bot.send_photo(
+                chat_id=user_id,
+                photo=img_buffer,
+                caption="Scannez ce QR code avec WhatsApp 📲"
+            )
+        
+            logger.info(f"✅ QR Code envoyé à {user_id} - Session: {session_id}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur envoi QR code: {e}")
+            # Fallback: envoyer le texte du QR code
+            try:
+                await self.application.bot.send_message(
+                    chat_id=user_id,
+                    text=self.escape_markdown(f"❌ Impossible de générer l'image QR\n\nCode texte: `{qr_code}`\n\nCopiez ce code manuellement dans WhatsApp"),
+                    parse_mode='MarkdownV2'
+                )
+                return True
+            except Exception as fallback_error:
+                logger.error(f"❌ Erreur fallback QR code: {fallback_error}")
+                return False
+
+    async def send_pairing_code(self, user_id, pairing_code, phone_number):
+        """Envoyer un code de pairing via Telegram"""
+        try:
+            pairing_text = self.escape_markdown(f"""
+🔐 Connexion par Code de Pairing
+
+📱 Votre code de pairing:
+`{pairing_code}`
+
+Instructions:
+1. Ouvrez WhatsApp sur votre téléphone
+2. Allez dans Paramètres → Appareils liés 
+3. Sélectionnez Lier un appareil
+4. Entrez le code ci-dessus
+5. Attendez la confirmation
+
+⏱️ Ce code expire dans 5 minutes
+
+La connexion se fera automatiquement!
+            """)
+        
+            await self.application.bot.send_message(
+                chat_id=user_id,
+                text=pairing_text,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"✅ Code de pairing envoyé à {user_id}: {pairing_code}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur envoi code pairing: {e}")
+            return False
+
+    # =========================================================================
+    # MÉTHODES D'API POUR COMMUNIQUER AVEC LE SERVEUR NODE.JS
+    # =========================================================================
+
     async def register_user(self, chat_id, name, username):
         """Enregistrer un utilisateur dans la base"""
         try:
@@ -1239,25 +1532,46 @@ Pour plus de détails: /stats
         except:
             return 0
 
-    async def send_message(self, chat_id, text, parse_mode='MarkdownV2', reply_markup=None):
-        """Envoyer un message de manière sécurisée"""
-        try:
-            await self.application.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup
-            )
-            return True
-        except Exception as e:
-            logger.error(f"❌ Erreur envoi message à {chat_id}: {e}")
-            return False
+    async def initialize(self):
+        """Initialisation asynchrone"""
+        # Se connecter au serveur Node.js
+        await self.node_connector.connect_to_nodejs()
+        
+        # Démarrer le pont HTTP
+        await self.http_bridge.start()
+        
+        logger.info("✅ Bot Telegram complètement initialisé")
 
     def run(self):
         """Démarrer le bot"""
         logger.info("🤖 Démarrage du bot Telegram NOVA-MD...")
+        
+        # Démarrer l'initialisation asynchrone
+        async def startup():
+            await self.initialize()
+        
+        # Lancer l'initialisation dans un thread séparé
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(startup())
+        
+        # Démarrer le bot Telegram
         self.application.run_polling()
+
+    async def stop(self):
+        """Arrêter le bot"""
+        logger.info("🛑 Arrêt du bot Telegram...")
+        await self.http_bridge.stop()
 
 if __name__ == '__main__':
     bot = NovaMDTelegramBot()
-    bot.run()
+    
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("Arrêt demandé par l'utilisateur")
+    except Exception as e:
+        logger.error(f"Erreur critique: {e}")
+    finally:
+        # Nettoyer les ressources
+        asyncio.run(bot.stop())

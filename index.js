@@ -19,6 +19,7 @@ class NovaMDApp {
         this.commandManager = new DynamicCommandManager();
         this.resourceManager = new ResourceManager();
         this.commandHandler = new CommandHandler();
+        this.botWebhookUrl = process.env.BOT_WEBHOOK_URL || 'http://localhost:3001/webhook';
         
         this.setupMiddleware();
         this.setupRoutes();
@@ -29,14 +30,28 @@ class NovaMDApp {
     async initialize() {
         await this.commandHandler.loadBuiltInCommands();
         
-        // Attendre que le bot Telegram soit configuré
-        if (!this.sessionManager.telegramBot) {
-            log.warn('⚠️  Bot Telegram non encore configuré');
-        }
+        // Tester la connexion avec le bot Python
+        await this.testBotConnection();
         
         log.success("🚀 NOVA-MD initialisé avec sessions persistantes");
         
         this.setupBackgroundServices();
+    }
+
+    async testBotConnection() {
+        try {
+            const response = await fetch(`${this.botWebhookUrl.replace('/webhook', '')}/health`);
+            if (response.ok) {
+                const data = await response.json();
+                if (data.status === 'healthy') {
+                    log.success('🤖 Bot Telegram connecté via pont HTTP');
+                    return true;
+                }
+            }
+        } catch (error) {
+            log.warn('⚠️  Bot Telegram non accessible via pont HTTP - utilisation du mode dégradé');
+        }
+        return false;
     }
 
     setTelegramBot(bot) {
@@ -102,6 +117,216 @@ class NovaMDApp {
             }
         });
 
+        // =========================================================================
+        // ROUTES PONT HTTP - Communication avec le bot Python
+        // =========================================================================
+
+        this.app.post('/api/bot/send-message', async (req, res) => {
+            try {
+                const { user_id, message, message_type = 'text' } = req.body;
+                
+                if (!user_id || !message) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        error: 'Paramètres manquants: user_id et message requis' 
+                    });
+                }
+
+                log.info(`📤 [PONT] Envoi message à ${user_id}: ${message.substring(0, 50)}...`);
+                
+                // Envoyer le message au bot Python via webhook
+                const botResult = await this.sendToBotWebhook('send-message', {
+                    user_id: user_id,
+                    message: message
+                });
+
+                if (botResult.success) {
+                    log.success(`✅ Message délivré à ${user_id} via bot Telegram`);
+                    res.json({ 
+                        success: true, 
+                        delivered: true,
+                        method: 'http_bridge',
+                        user_id: user_id,
+                        timestamp: new Date().toISOString(),
+                        bot_response: botResult
+                    });
+                } else {
+                    log.warn(`⚠️  Message non délivré à ${user_id}, fallback console`);
+                    // Fallback: afficher dans la console
+                    console.log(`💬 [TELEGRAM-FALLBACK] Message pour ${user_id}: ${message}`);
+                    
+                    res.json({ 
+                        success: true, 
+                        delivered: false,
+                        method: 'console_fallback',
+                        user_id: user_id,
+                        timestamp: new Date().toISOString(),
+                        note: 'Message affiché dans console (bot non disponible)'
+                    });
+                }
+                
+            } catch (error) {
+                log.error('❌ Erreur envoi message:', error);
+                res.status(500).json({ 
+                    success: false, 
+                    error: error.message,
+                    method: 'error'
+                });
+            }
+        });
+
+        this.app.post('/api/bot/send-qr', async (req, res) => {
+            try {
+                const { user_id, qr_code, session_id } = req.body;
+                
+                if (!user_id || !qr_code) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        error: 'Paramètres manquants: user_id et qr_code requis' 
+                    });
+                }
+
+                log.info(`📱 [PONT] Envoi QR à ${user_id} (session: ${session_id})`);
+                
+                // Envoyer le QR au bot Python via webhook
+                const botResult = await this.sendToBotWebhook('send-qr', {
+                    user_id: user_id,
+                    qr_code: qr_code,
+                    session_id: session_id
+                });
+
+                if (botResult.success) {
+                    log.success(`✅ QR délivré à ${user_id} via bot Telegram`);
+                    res.json({ 
+                        success: true,
+                        method: 'http_bridge',
+                        user_id: user_id,
+                        session_id: session_id,
+                        timestamp: new Date().toISOString(),
+                        bot_response: botResult
+                    });
+                } else {
+                    log.warn(`⚠️  QR non délivré à ${user_id}, fallback console`);
+                    // Fallback: afficher dans la console
+                    console.log(`📱 [TELEGRAM-FALLBACK] QR Code pour ${user_id}: ${qr_code}`);
+                    
+                    res.json({ 
+                        success: true, 
+                        delivered: false,
+                        method: 'console_fallback',
+                        user_id: user_id,
+                        session_id: session_id,
+                        timestamp: new Date().toISOString(),
+                        note: 'QR affiché dans console (bot non disponible)'
+                    });
+                }
+                
+            } catch (error) {
+                log.error('❌ Erreur envoi QR:', error);
+                res.status(500).json({ 
+                    success: false, 
+                    error: error.message,
+                    method: 'error'
+                });
+            }
+        });
+
+        this.app.post('/api/bot/send-pairing', async (req, res) => {
+            try {
+                const { user_id, pairing_code, phone_number } = req.body;
+                
+                if (!user_id || !pairing_code) {
+                    return res.status(400).json({ 
+                        success: false, 
+                        error: 'Paramètres manquants: user_id et pairing_code requis' 
+                    });
+                }
+
+                log.info(`🔐 [PONT] Envoi pairing à ${user_id}: ${pairing_code}`);
+                
+                // Envoyer le code de pairing au bot Python via webhook
+                const botResult = await this.sendToBotWebhook('send-pairing', {
+                    user_id: user_id,
+                    pairing_code: pairing_code,
+                    phone_number: phone_number
+                });
+
+                if (botResult.success) {
+                    log.success(`✅ Code pairing délivré à ${user_id} via bot Telegram`);
+                    res.json({ 
+                        success: true,
+                        method: 'http_bridge',
+                        user_id: user_id,
+                        pairing_code: pairing_code,
+                        timestamp: new Date().toISOString(),
+                        bot_response: botResult
+                    });
+                } else {
+                    log.warn(`⚠️  Code pairing non délivré à ${user_id}, fallback console`);
+                    // Fallback: afficher dans la console
+                    console.log(`🔐 [TELEGRAM-FALLBACK] Pairing Code pour ${user_id}: ${pairing_code}`);
+                    
+                    res.json({ 
+                        success: true, 
+                        delivered: false,
+                        method: 'console_fallback',
+                        user_id: user_id,
+                        pairing_code: pairing_code,
+                        timestamp: new Date().toISOString(),
+                        note: 'Code pairing affiché dans console (bot non disponible)'
+                    });
+                }
+                
+            } catch (error) {
+                log.error('❌ Erreur envoi pairing:', error);
+                res.status(500).json({ 
+                    success: false, 
+                    error: error.message,
+                    method: 'error'
+                });
+            }
+        });
+
+        this.app.post('/api/bot/connect', async (req, res) => {
+            try {
+                const { bot_available, methods, webhook_url } = req.body;
+                
+                if (bot_available) {
+                    // Mettre à jour l'URL du webhook si fournie
+                    if (webhook_url) {
+                        this.botWebhookUrl = webhook_url;
+                        log.info(`🌉 URL webhook bot mise à jour: ${webhook_url}`);
+                    }
+                    
+                    log.success('🤖 Bot Telegram connecté via pont HTTP');
+                    
+                    res.json({ 
+                        success: true, 
+                        message: 'Bot connecté avec succès',
+                        methods_available: methods,
+                        bridge: 'http_pont',
+                        webhook_url: this.botWebhookUrl,
+                        timestamp: new Date().toISOString()
+                    });
+                } else {
+                    res.status(400).json({ 
+                        success: false, 
+                        error: 'Bot non disponible' 
+                    });
+                }
+            } catch (error) {
+                log.error('❌ Erreur connexion bot:', error);
+                res.status(500).json({ 
+                    success: false, 
+                    error: error.message 
+                });
+            }
+        });
+
+        // =========================================================================
+        // ROUTES EXISTANTES
+        // =========================================================================
+
         this.app.post('/api/auth/validate-code', async (req, res) => {
             try {
                 const { chat_id, code } = req.body;
@@ -131,7 +356,6 @@ class NovaMDApp {
             }
         });
 
-        // NOUVELLE ROUTE - Création de session avec numéro pour pairing
         this.app.post('/api/sessions/create-with-phone', async (req, res) => {
             try {
                 const { chat_id, user_name, method = 'pairing', phone_number, persistent = true } = req.body;
@@ -143,7 +367,6 @@ class NovaMDApp {
                 // 🔒 Stocker uniquement les données nécessaires, SANS le numéro
                 const userData = { 
                     name: user_name
-                    // phone_number: phone_number ⚠️ NE PAS SAUVEGARDER
                 };
                 
                 // Passer le numéro uniquement pour le traitement immédiat
@@ -151,7 +374,7 @@ class NovaMDApp {
                     chat_id, 
                     userData, 
                     method, 
-                    phone_number  // 🔒 Utilisé temporairement puis oublié
+                    phone_number
                 );
                 
                 res.json({ ...sessionData, success: true });
@@ -243,7 +466,6 @@ class NovaMDApp {
             }
         });
 
-        // NOUVELLE ROUTE - Mise à jour simple
         this.app.post('/api/updates/simple-update', async (req, res) => {
             try {
                 if (!this.updateManager) {
@@ -357,6 +579,88 @@ class NovaMDApp {
         });
     }
 
+    // =========================================================================
+    // MÉTHODES POUR LE PONT HTTP
+    // =========================================================================
+
+    async sendToBotWebhook(endpoint, data) {
+        try {
+            const url = `${this.botWebhookUrl}/${endpoint}`;
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data),
+                timeout: 10000 // 10 secondes timeout
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                return result;
+            } else {
+                log.warn(`⚠️  Réponse non-OK du bot: ${response.status}`);
+                return { 
+                    success: false, 
+                    error: `HTTP ${response.status}`,
+                    status: response.status
+                };
+            }
+        } catch (error) {
+            log.warn(`⚠️  Impossible de contacter le bot: ${error.message}`);
+            return { 
+                success: false, 
+                error: error.message,
+                connection_error: true
+            };
+        }
+    }
+
+    async sendMessageToUser(userId, message) {
+        try {
+            const result = await this.sendToBotWebhook('send-message', {
+                user_id: userId,
+                message: message
+            });
+            
+            return result.success || false;
+        } catch (error) {
+            log.error(`❌ Erreur envoi message à ${userId}:`, error);
+            return false;
+        }
+    }
+
+    async sendQRToUser(userId, qrCode, sessionId) {
+        try {
+            const result = await this.sendToBotWebhook('send-qr', {
+                user_id: userId,
+                qr_code: qrCode,
+                session_id: sessionId
+            });
+            
+            return result.success || false;
+        } catch (error) {
+            log.error(`❌ Erreur envoi QR à ${userId}:`, error);
+            return false;
+        }
+    }
+
+    async sendPairingToUser(userId, pairingCode, phoneNumber) {
+        try {
+            const result = await this.sendToBotWebhook('send-pairing', {
+                user_id: userId,
+                pairing_code: pairingCode,
+                phone_number: phoneNumber
+            });
+            
+            return result.success || false;
+        } catch (error) {
+            log.error(`❌ Erreur envoi pairing à ${userId}:`, error);
+            return false;
+        }
+    }
+
     start() {
         this.server = this.app.listen(this.port, () => {
             log.success(`🚀 Serveur NOVA-MD démarré sur le port ${this.port}`);
@@ -364,6 +668,8 @@ class NovaMDApp {
             log.success(`🔐 Sessions persistantes: ${config.features.persistentSessions ? 'Activées' : 'Désactivées'}`);
             log.success(`🔄 Mises à jour auto: ${config.features.autoUpdate ? 'Activées' : 'Désactivées'}`);
             log.success(`🔇 Mode silencieux: ${config.features.silentMode ? 'Activé' : 'Désactivé'}`);
+            log.success(`🌉 Pont HTTP: ${this.botWebhookUrl}`);
+            log.success(`📡 Mode: ${this.botWebhookUrl.includes('localhost') ? 'Développement' : 'Production'}`);
         });
     }
 

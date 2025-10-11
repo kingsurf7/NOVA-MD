@@ -22,6 +22,7 @@ class PairingManager {
     this.supabase = createClient(config.supabase.url, config.supabase.key);
     this.isPairingMode = process.argv.includes("--use-pairing-code");
     this.activePairings = new Map();
+    this.nodeApiUrl = process.env.NODE_API_URL || 'http://localhost:3000';
   }
 
   async initializePairing(userId, userData, phoneNumber = null) {
@@ -120,44 +121,17 @@ class PairingManager {
             
             log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code}`);
             
-            // Utiliser la nouvelle méthode du SessionManager
-            if (this.sessionManager.telegramBot) {
-              try {
-                await this.sessionManager.sendPairingCode(userId, code, phoneNumber);
-                log.success(`✅ Code de pairing envoyé à l'utilisateur ${userId}`);
-                pairingCodeSent = true;
-              } catch (error) {
-                log.error(`❌ Erreur envoi code pairing à ${userId}:`, error);
-                // Fallback avec message simple
-                try {
-                  await this.sessionManager.sendMessage(
-                    userId,
-                    `🔐 Votre code de pairing: ${code}\n\nEntrez ce code dans WhatsApp → Paramètres → Appareils liés`
-                  );
-                  log.success(`✅ Code de pairing envoyé en texte à ${userId}`);
-                  pairingCodeSent = true;
-                } catch (fallbackError) {
-                  log.error(`❌ Erreur fallback pairing texte:`, fallbackError);
-                }
-              }
+            // Utiliser le pont HTTP pour envoyer le code
+            const sent = await this.sendPairingCodeViaHTTP(userId, code, phoneNumber);
+            if (sent) {
+              pairingCodeSent = true;
             } else {
-              log.error(`❌ TelegramBot non disponible pour l'envoi pairing à ${userId}`);
-              // Dernier fallback - log le code
-              log.info(`🔐 CODE DE PAIRING POUR ${userId}: ${code}`);
+              log.error(`❌ Échec envoi pairing à ${userId} via HTTP`);
             }
 
           } catch (error) {
             log.error('❌ Erreur génération code pairing:', error);
-            if (this.sessionManager.telegramBot) {
-              try {
-                await this.sessionManager.sendMessage(
-                  userId,
-                  "❌ Erreur lors de la génération du code pairing. Réessayez."
-                );
-              } catch (sendError) {
-                log.error(`❌ Erreur envoi message erreur à ${userId}:`, sendError);
-              }
-            }
+            await this.sendMessageViaHTTP(userId, "❌ Erreur lors de la génération du code pairing. Réessayez.");
           }
         }
       }, 3000);
@@ -212,19 +186,8 @@ class PairingManager {
           log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code}`);
           // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
           
-          // Utiliser la nouvelle méthode du SessionManager
-          if (this.sessionManager.telegramBot) {
-            try {
-              await this.sessionManager.sendPairingCode(userId, code, phoneNumber);
-            } catch (error) {
-              log.error(`❌ Erreur envoi code pairing à ${userId}:`, error);
-              // Fallback
-              await this.sessionManager.sendMessage(
-                userId,
-                `🔐 Votre code de pairing: ${code}\n\nEntrez ce code dans WhatsApp`
-              );
-            }
-          }
+          // Utiliser le pont HTTP pour envoyer le code
+          await this.sendPairingCodeViaHTTP(userId, code, phoneNumber);
 
           console.log(
             chalk.black(chalk.bgGreen(`✅ Code de Pairing : `)),
@@ -233,16 +196,7 @@ class PairingManager {
 
         } catch (error) {
           log.error('❌ Erreur génération code pairing:', error);
-          if (this.sessionManager.telegramBot) {
-            try {
-              await this.sessionManager.sendMessage(
-                userId,
-                "❌ Erreur lors de la génération du code. Réessayez."
-              );
-            } catch (sendError) {
-              log.error(`❌ Erreur envoi message erreur à ${userId}:`, sendError);
-            }
-          }
+          await this.sendMessageViaHTTP(userId, "❌ Erreur lors de la génération du code. Réessayez.");
         }
       }, 3000);
 
@@ -295,23 +249,17 @@ class PairingManager {
       this.activePairings.delete(userId);
       if (rl) rl.close();
 
-      if (this.sessionManager.telegramBot) {
-        let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
-        message += `Méthode: Code de Pairing\\n`;
-        message += `Compte: ${socket.user?.name || socket.user?.id}\\n`;
-        
-        if (sessionData.subscriptionActive) {
-          message += `\\n🔐 *SESSION PERMANENTE* - Reste active 30 jours\\n`;
-          message += `Vous n'aurez pas à vous reconnecter!`;
-        }
-
-        try {
-          await this.sessionManager.sendMessage(userId, message);
-          log.success(`✅ Message de succès pairing envoyé à ${userId}`);
-        } catch (error) {
-          log.error(`❌ Erreur envoi message succès à ${userId}:`, error);
-        }
+      let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
+      message += `Méthode: Code de Pairing\\n`;
+      message += `Compte: ${socket.user?.name || socket.user?.id}\\n`;
+      
+      if (sessionData.subscriptionActive) {
+        message += `\\n🔐 *SESSION PERMANENTE* - Reste active 30 jours\\n`;
+        message += `Vous n'aurez pas à vous reconnecter!`;
       }
+
+      await this.sendMessageViaHTTP(userId, message);
+      log.success(`✅ Message de succès pairing envoyé à ${userId}`);
 
       log.success(`🎯 Session pairing créée: ${sessionId} (${isPayedUser ? 'Payante' : 'Essai'})`);
 
@@ -328,33 +276,74 @@ class PairingManager {
       log.info("🔄 Tentative de reconnexion pairing...");
       await this.cleanup();
       
-      if (this.sessionManager.telegramBot) {
-        try {
-          await this.sessionManager.sendMessage(
-            userId,
-            "🔌 Connexion interrompue. Reconnexion en cours..."
-          );
-        } catch (error) {
-          log.error(`❌ Erreur envoi message reconnexion à ${userId}:`, error);
-        }
-      }
+      await this.sendMessageViaHTTP(userId, "🔌 Connexion interrompue. Reconnexion en cours...");
     } else {
       log.error("❌ Pairing échoué - erreur d'authentification");
-      if (this.sessionManager.telegramBot) {
-        try {
-          await this.sessionManager.sendMessage(
-            userId,
-            "❌ Échec de connexion. Réessayez avec /connect."
-          );
-        } catch (error) {
-          log.error(`❌ Erreur envoi message échec à ${userId}:`, error);
-        }
-      }
+      await this.sendMessageViaHTTP(userId, "❌ Échec de connexion. Réessayez avec /connect.");
     }
 
     if (pairing) {
       if (pairing.rl) pairing.rl.close();
       this.activePairings.delete(userId);
+    }
+  }
+
+  // =========================================================================
+  // MÉTHODES PONT HTTP
+  // =========================================================================
+
+  async sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber) {
+    try {
+      const response = await fetch(`${this.nodeApiUrl}/api/bot/send-pairing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          pairing_code: pairingCode,
+          phone_number: phoneNumber
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        log.success(`✅ Code pairing envoyé à ${userId} via pont HTTP`);
+        return true;
+      } else {
+        log.error(`❌ Échec envoi pairing à ${userId}:`, result.error);
+        return false;
+      }
+      
+    } catch (error) {
+      log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message);
+      return false;
+    }
+  }
+
+  async sendMessageViaHTTP(userId, message) {
+    try {
+      const response = await fetch(`${this.nodeApiUrl}/api/bot/send-message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: userId,
+          message: message
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        log.success(`✅ Message envoyé à ${userId} via pont HTTP`);
+        return true;
+      } else {
+        log.error(`❌ Échec envoi message à ${userId}:`, result.error);
+        return false;
+      }
+      
+    } catch (error) {
+      log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message);
+      return false;
     }
   }
 
@@ -416,4 +405,4 @@ class PairingManager {
   }
 }
 
-module.exports = PairingManager;
+module.exports = PairingManager; 

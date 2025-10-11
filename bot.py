@@ -100,84 +100,6 @@ class NovaMDTelegramBot:
         escape_chars = r'\_*[]()~`>#+-=|{}.!'
         return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        chat_id = update.effective_chat.id
-        
-        # Enregistrer l'utilisateur
-        await self.register_user(chat_id, user.first_name, user.username)
-        
-        welcome_text = self.escape_markdown(f"""
-🤖 Bienvenue sur NOVA-MD Premium 🤖
-
-Service de Bot WhatsApp Automatisé avec Sessions Persistantes
-
-🎯 Fonctionnalités Premium:
-• Commandes audio avancées
-• Gestion de médias intelligente  
-• Sessions WhatsApp permanentes
-• Support prioritaire 24/7
-• Mises à jour automatiques
-• Mode silencieux
-• Contrôle d'accès
-
-🔐 Système d'Accès Unique:
-• 1 code d'accès = 1 utilisateur
-• 1 utilisateur = 1 device WhatsApp  
-• Session permanente selon la durée
-
-Utilisez les boutons ci-dessous pour naviguer!
-        """)
-        
-        await update.message.reply_text(
-            welcome_text, 
-            reply_markup=self.get_main_keyboard(),
-            parse_mode='MarkdownV2'
-        )
-        
-    async def show_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        
-        # Vérifier si admin pour afficher le clavier approprié
-        if chat_id in ADMIN_IDS:
-            menu_text = self.escape_markdown("⚡ Menu Principal NOVA-MD\n\nChoisissez une option:")
-            await update.message.reply_text(
-                menu_text,
-                reply_markup=self.get_admin_keyboard(),
-                parse_mode='MarkdownV2'
-            )
-        else:
-            menu_text = self.escape_markdown("⚡ Menu Principal NOVA-MD\n\nChoisissez une option:")
-            await update.message.reply_text(
-                menu_text,
-                reply_markup=self.get_main_keyboard(),
-                parse_mode='MarkdownV2'
-            )
-
-    async def use_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
-        
-        code_text = self.escape_markdown("""
-🔑 Activation du code d'accès
-
-Veuillez entrer le code que vous avez reçu de l'administrateur:
-
-Format: NOVA-XXXXXXX
-
-Important:
-• Un code ne peut être utilisé qu'UNE SEULE FOIS
-• Un code = Un utilisateur = Un device WhatsApp
-• Votre session sera permanente selon la durée du code
-        """)
-        
-        await update.message.reply_text(
-            code_text,
-            parse_mode='MarkdownV2',
-            reply_markup=ReplyKeyboardRemove()
-        )
-        
-        context.user_data['waiting_for_code'] = True
-
     async def send_qr_code(self, chat_id, qr_data, session_id):
         """Envoyer le QR code à l'utilisateur"""
         try:
@@ -270,7 +192,85 @@ La connexion se fera automatiquement!
             logger.info(f"✅ Code de pairing envoyé à {chat_id}: {code}")
         
         except Exception as e:
-            logger.error(f"❌ Erreur envoi code pairing: {e}") 
+            logger.error(f"❌ Erreur envoi code pairing: {e}")
+
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        chat_id = update.effective_chat.id
+        
+        # Enregistrer l'utilisateur
+        await self.register_user(chat_id, user.first_name, user.username)
+        
+        welcome_text = self.escape_markdown(f"""
+🤖 Bienvenue sur NOVA-MD Premium 🤖
+
+Service de Bot WhatsApp Automatisé avec Sessions Persistantes
+
+🎯 Fonctionnalités Premium:
+• Commandes audio avancées
+• Gestion de médias intelligente  
+• Sessions WhatsApp permanentes
+• Support prioritaire 24/7
+• Mises à jour automatiques
+• Mode silencieux
+• Contrôle d'accès
+
+🔐 Système d'Accès Unique:
+• 1 code d'accès = 1 utilisateur
+• 1 utilisateur = 1 device WhatsApp  
+• Session permanente selon la durée
+
+Utilisez les boutons ci-dessous pour naviguer!
+        """)
+        
+        await update.message.reply_text(
+            welcome_text, 
+            reply_markup=self.get_main_keyboard(),
+            parse_mode='MarkdownV2'
+        )
+        
+    async def show_main_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        
+        # Vérifier si admin pour afficher le clavier approprié
+        if chat_id in ADMIN_IDS:
+            menu_text = self.escape_markdown("⚡ Menu Principal NOVA-MD\n\nChoisissez une option:")
+            await update.message.reply_text(
+                menu_text,
+                reply_markup=self.get_admin_keyboard(),
+                parse_mode='MarkdownV2'
+            )
+        else:
+            menu_text = self.escape_markdown("⚡ Menu Principal NOVA-MD\n\nChoisissez une option:")
+            await update.message.reply_text(
+                menu_text,
+                reply_markup=self.get_main_keyboard(),
+                parse_mode='MarkdownV2'
+            )
+
+    async def use_code(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat_id = update.effective_chat.id
+        
+        code_text = self.escape_markdown("""
+🔑 Activation du code d'accès
+
+Veuillez entrer le code que vous avez reçu de l'administrateur:
+
+Format: NOVA-XXXXXXX
+
+Important:
+• Un code ne peut être utilisé qu'UNE SEULE FOIS
+• Un code = Un utilisateur = Un device WhatsApp
+• Votre session sera permanente selon la durée du code
+        """)
+        
+        await update.message.reply_text(
+            code_text,
+            parse_mode='MarkdownV2',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        context.user_data['waiting_for_code'] = True
 
     async def subscribe_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         subscribe_text = self.escape_markdown(f"""
@@ -1070,28 +1070,6 @@ Pour plus de détails: /stats
             await update.message.reply_text(users_text, parse_mode='MarkdownV2')
         else:
             await update.message.reply_text("❌ Aucun utilisateur actif trouvé.")
-
-    async def send_pairing_code(self, chat_id, code, phone_number):
-        """Envoyer le code de pairing à l'utilisateur"""
-        pairing_text = self.escape_markdown(f"""
-🔐 Connexion par Code de Pairing
-
-📱 Votre code de pairing:
-`{code}`
-
-Instructions:
-1. Ouvrez WhatsApp sur votre téléphone
-2. Allez dans Paramètres → Appareils liés 
-3. Sélectionnez Lier un appareil
-4. Entrez le code ci-dessus
-5. Attendez la confirmation
-
-⏱️ Ce code expire dans 5 minutes
-
-La connexion se fera automatiquement!
-        """)
-        
-        await self.send_message(chat_id, pairing_text)
 
     # Méthodes d'API pour communiquer avec le serveur Node.js
     async def register_user(self, chat_id, name, username):

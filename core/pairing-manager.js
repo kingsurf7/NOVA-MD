@@ -119,21 +119,34 @@ class PairingManager {
           // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
           
           if (this.sessionManager.telegramBot) {
-            try{
+            try {
               await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
               log.success(`✅ Code de pairing envoyé à l'utilisateur ${userId}`);
-               } catch (error) {
-                        log.error(`❌ Erreur envoi code à ${userId}:`, error);
+            } catch (error) {
+              log.error(`❌ Erreur envoi code à ${userId}:`, error);
+              // Fallback
+              try {
+                await this.sessionManager.telegramBot.sendMessage(
+                  userId,
+                  `🔐 Votre code de pairing: ${code}\n\nEntrez ce code dans WhatsApp → Paramètres → Appareils liés`
+                );
+              } catch (fallbackError) {
+                log.error(`❌ Erreur fallback pairing:`, fallbackError);
+              }
             }
           }
 
         } catch (error) {
           log.error('❌ Erreur génération code pairing:', error);
           if (this.sessionManager.telegramBot) {
-            await this.sessionManager.telegramBot.sendMessage(
-              userId,
-              "❌ Erreur lors de la génération du code. Réessayez."
-            );
+            try {
+              await this.sessionManager.telegramBot.sendMessage(
+                userId,
+                "❌ Erreur lors de la génération du code. Réessayez."
+              );
+            } catch (sendError) {
+              log.error(`❌ Erreur envoi message erreur à ${userId}:`, sendError);
+            }
           }
         }
       }, 3000);
@@ -187,7 +200,11 @@ class PairingManager {
           // 🔒 NUMÉRO NON LOGGÉ pour la sécurité
           
           if (this.sessionManager.telegramBot) {
-            await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+            try {
+              await this.sessionManager.telegramBot.sendPairingCode(userId, code, phoneNumber);
+            } catch (error) {
+              log.error(`❌ Erreur envoi code pairing à ${userId}:`, error);
+            }
           }
 
           console.log(
@@ -198,10 +215,14 @@ class PairingManager {
         } catch (error) {
           log.error('❌ Erreur génération code pairing:', error);
           if (this.sessionManager.telegramBot) {
-            await this.sessionManager.telegramBot.sendMessage(
-              userId,
-              "❌ Erreur lors de la génération du code. Réessayez."
-            );
+            try {
+              await this.sessionManager.telegramBot.sendMessage(
+                userId,
+                "❌ Erreur lors de la génération du code. Réessayez."
+              );
+            } catch (sendError) {
+              log.error(`❌ Erreur envoi message erreur à ${userId}:`, sendError);
+            }
           }
         }
       }, 3000);
@@ -265,7 +286,11 @@ class PairingManager {
           message += `Vous n'aurez pas à vous reconnecter!`;
         }
 
-        await this.sessionManager.telegramBot.sendMessage(userId, message);
+        try {
+          await this.sessionManager.telegramBot.sendMessage(userId, message);
+        } catch (error) {
+          log.error(`❌ Erreur envoi message succès à ${userId}:`, error);
+        }
       }
 
       log.success(`🎯 Session pairing créée: ${sessionId} (${isPayedUser ? 'Payante' : 'Essai'})`);
@@ -284,18 +309,26 @@ class PairingManager {
       await this.cleanup();
       
       if (this.sessionManager.telegramBot) {
-        await this.sessionManager.telegramBot.sendMessage(
-          userId,
-          "🔌 Connexion interrompue. Reconnexion en cours..."
-        );
+        try {
+          await this.sessionManager.telegramBot.sendMessage(
+            userId,
+            "🔌 Connexion interrompue. Reconnexion en cours..."
+          );
+        } catch (error) {
+          log.error(`❌ Erreur envoi message reconnexion à ${userId}:`, error);
+        }
       }
     } else {
       log.error("❌ Pairing échoué - erreur d'authentification");
       if (this.sessionManager.telegramBot) {
-        await this.sessionManager.telegramBot.sendMessage(
-          userId,
-          "❌ Échec de connexion. Réessayez avec /connect."
-        );
+        try {
+          await this.sessionManager.telegramBot.sendMessage(
+            userId,
+            "❌ Échec de connexion. Réessayez avec /connect."
+          );
+        } catch (error) {
+          log.error(`❌ Erreur envoi message échec à ${userId}:`, error);
+        }
       }
     }
 

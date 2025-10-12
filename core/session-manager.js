@@ -152,93 +152,119 @@ class SessionManager {
         }
     }
 
-    async createQRSession(userId, userData, isPayedUser = false) {
-        try {
-            // Test d'envoi de message simple
-            await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
-            log.success(`✅ Message test envoyé à ${userId}`);
+    // Dans createQRSession - améliorer la configuration
+async createQRSession(userId, userData, isPayedUser = false) {
+    try {
+        await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
 
-            const sessionId = `qr_${userId}_${Date.now()}`;
-            const authDir = `./sessions/${sessionId}`;
+        const sessionId = `qr_${userId}_${Date.now()}`;
+        const authDir = `./sessions/${sessionId}`;
 
-            const { state, saveCreds } = await useMultiFileAuthState(authDir);
-            
-            const sock = makeWASocket({
-                auth: state,
-                logger: P({ level: "silent" }),
-                browser: ['Chrome (Linux)', '', ''],
-                syncFullHistory: false,
-                markOnlineOnConnect: false
-            });
+        const { state, saveCreds } = await useMultiFileAuthState(authDir);
+        
+        // Configuration améliorée pour WhatsApp Web
+        const sock = makeWASocket({
+            auth: state,
+            logger: P({ level: "silent" }),
+            browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
+            printQRInTerminal: false,
+            syncFullHistory: false,
+            markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
+            emitOwnEvents: true,
+            defaultQueryTimeoutMs: 60000,
+            connectTimeoutMs: 30000,
+            keepAliveIntervalMs: 15000
+        });
 
-            this.sessions.set(sessionId, {
-                socket: sock,
-                userId: userId,
-                userData: userData,
-                authDir: authDir,
-                saveCreds: saveCreds,
+        this.sessions.set(sessionId, {
+            socket: sock,
+            userId: userId,
+            userData: userData,
+            authDir: authDir,
+            saveCreds: saveCreds,
+            status: 'connecting',
+            subscriptionActive: isPayedUser,
+            connectionMethod: 'qr',
+            createdAt: new Date(),
+            lastActivity: new Date()
+        });
+
+        await this.supabase
+            .from('whatsapp_sessions')
+            .insert([{
+                session_id: sessionId,
+                user_id: userId,
+                user_data: userData,
                 status: 'connecting',
-                subscriptionActive: isPayedUser,
-                connectionMethod: 'qr',
-                createdAt: new Date(),
-                lastActivity: new Date()
-            });
+                subscription_active: isPayedUser,
+                connection_method: 'qr',
+                created_at: new Date().toISOString(),
+                last_activity: new Date().toISOString()
+            }]);
 
-            await this.supabase
-                .from('whatsapp_sessions')
-                .insert([{
-                    session_id: sessionId,
-                    user_id: userId,
-                    user_data: userData,
-                    status: 'connecting',
-                    subscription_active: isPayedUser,
-                    connection_method: 'qr',
-                    created_at: new Date().toISOString(),
-                    last_activity: new Date().toISOString()
-                }]);
-
-            this.setupSocketEvents(sock, sessionId, userId);
-            
-            return { 
-                sessionId: sessionId, 
-                method: 'qr',
-                persistent: isPayedUser
-            };
-        } catch (error) {
-            log.error('❌ Erreur création session QR:', error);
-            throw error;
-        }
+        this.setupSocketEvents(sock, sessionId, userId);
+        
+        return { 
+            sessionId: sessionId, 
+            method: 'qr',
+            persistent: isPayedUser
+        };
+    } catch (error) {
+        log.error('❌ Erreur création session QR:', error);
+        throw error;
     }
-
-    setupSocketEvents(sock, sessionId, userId) {
-        sock.ev.on("connection.update", async (update) => {
-            const { connection, qr, lastDisconnect } = update;
-
-            if (qr) {
-                log.info(`📱 QR généré pour ${userId}`);
-                await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
-                
-                // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
-                await this.sendQRCode(userId, qr, sessionId);
             }
 
-            if (connection === "open") {
-                log.success(`✅ Session connectée: ${userId}`);
-                await this.handleConnectionSuccess(sock, sessionId, userId);
-            }
+    // Dans setupSocketEvents de session-manager.js
+setupSocketEvents(sock, sessionId, userId) {
+    sock.ev.on("connection.update", async (update) => {
+        const { connection, qr, lastDisconnect, isNewLogin, isOnline } = update;
 
-            if (connection === "close") {
-                await this.handleConnectionClose(sessionId, lastDisconnect);
-            }
+        log.info(`🔌 [WHATSAPP] ${userId} - Connection update:`, {
+            connection,
+            hasQR: !!qr,
+            isNewLogin,
+            isOnline
         });
 
-        sock.ev.on("creds.update", async (creds) => {
-            const session = this.sessions.get(sessionId);
-            if (session) {
-                await session.saveCreds();
-                await this.updateSessionActivity(sessionId);
-            }
-        });
+        if (qr) {
+            log.info(`📱 QR généré pour ${userId} (${qr.length} caractères)`);
+            await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
+            
+            // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
+            await this.sendQRCode(userId, qr, sessionId);
+        }
+
+        if (connection === "open") {
+            log.success(`✅ Session connectée: ${userId}`);
+            await this.handleConnectionSuccess(sock, sessionId, userId);
+        }
+
+        if (connection === "close") {
+            log.warn(`🔌 Connexion fermée pour ${userId}:`, lastDisconnect?.error?.message);
+            await this.handleConnectionClose(sessionId, lastDisconnect);
+        }
+        
+        if (isNewLogin) {
+            log.info(`🔄 Nouvelle connexion détectée pour ${userId}`);
+        }
+    });
+
+    sock.ev.on("creds.update", async (creds) => {
+        log.info(`🔑 Mise à jour credentials pour ${userId}`);
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            await session.saveCreds();
+            await this.updateSessionActivity(sessionId);
+        }
+    });
+
+    sock.ev.on("messages.upsert", async (m) => {
+        log.info(`📨 Message reçu pour ${userId}: ${m.messages?.length} messages`);
+        await this.handleIncomingMessage(m, sessionId);
+    });
+        
 
         sock.ev.on("messages.upsert", async (m) => {
             await this.handleIncomingMessage(m, sessionId);

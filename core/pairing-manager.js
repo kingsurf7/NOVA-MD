@@ -98,11 +98,13 @@ class PairingManager {
     }
   }
 
-// Dans pairing-manager.js - améliorer startPairingWithPhone
+
+  // methode pour effectuer le pairing 
 async startPairingWithPhone(userId, userData, phoneNumber) {
     const { state, saveCreds } = await useMultiFileAuthState("./" + this.sessionName);
     
     try {
+        // Configuration optimisée pour pairing
         const socket = makeWASocket({
             logger: pino({ level: "silent" }),
             browser: ["Ubuntu", "Chrome", "120.0.0.0"],
@@ -110,16 +112,22 @@ async startPairingWithPhone(userId, userData, phoneNumber) {
             syncFullHistory: false,
             markOnlineOnConnect: true,
             printQRInTerminal: false,
-            connectTimeoutMs: 30000
+            connectTimeoutMs: 60000, // 60 secondes
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            retryRequestDelayMs: 3000,
+            maxRetries: 3
         });
 
         let pairingCodeSent = false;
+        let pairingSuccess = false;
         
         const pairingTimeout = setTimeout(async () => {
             if (!pairingCodeSent) {
                 try {
                     log.info(`📱 Génération du code pairing pour le numéro: ${phoneNumber.substring(0, 6)}...`);
                     
+                    // Générer le code pairing avec timeout plus long
                     let code = await socket.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join("-") || code;
                     
@@ -130,44 +138,64 @@ async startPairingWithPhone(userId, userData, phoneNumber) {
                     if (sent) {
                         pairingCodeSent = true;
                         
-                        // Envoyer des instructions supplémentaires
+                        // Envoyer des instructions détaillées
                         await this.sendMessageViaHTTP(userId, 
-                            `📋 *Instructions importantes:*\n\n` +
+                            `🔐 *Connexion WhatsApp - Code de Pairing*\n\n` +
+                            `📱 *Votre code:* \`${code}\`\n\n` +
+                            `*Instructions détaillées:*\n` +
                             `1. Ouvrez WhatsApp sur votre téléphone\n` +
                             `2. Allez dans *Paramètres* → *Appareils liés* → *Lier un appareil*\n` +
-                            `3. Entrez le code: *${code}*\n` +
-                            `4. Attendez la confirmation\n\n` +
-                            `⏱️ *Ce code expire dans 5 minutes*`
+                            `3. Sélectionnez *Lier avec numéro de pairing*\n` +
+                            `4. Entrez le code exactement comme affiché\n` +
+                            `5. Attendez la confirmation\n\n` +
+                            `⏱️ *Ce code expire dans 5 minutes*\n` +
+                            `📞 *Numéro utilisé:* ${phoneNumber}`
                         );
+                        
+                        log.info(`✅ Code pairing ${code} envoyé à ${userId} pour le numéro ${phoneNumber}`);
                     } else {
                         log.error(`❌ Échec envoi pairing à ${userId} via HTTP`);
+                        throw new Error('Échec envoi du code pairing');
                     }
 
                 } catch (error) {
                     log.error('❌ Erreur génération code pairing:', error);
+                    
+                    // NE PAS basculer automatiquement vers QR - informer l'utilisateur
                     await this.sendMessageViaHTTP(userId, 
                         "❌ *Erreur lors de la génération du code pairing*\n\n" +
                         "Raisons possibles:\n" +
                         "• Numéro WhatsApp invalide\n" +
-                        "• Problème de réseau\n" +
-                        "• WhatsApp bloqué temporairement\n\n" +
-                        "Réessayez ou utilisez la méthode QR Code"
+                        "• WhatsApp n'est pas installé sur ce numéro\n" +
+                        "• Problème de réseau avec les serveurs WhatsApp\n" +
+                        "• Numéro déjà connecté ailleurs\n\n" +
+                        "Solutions:\n" +
+                        "• Vérifiez que le numéro est correct\n" +
+                        "• Assurez-vous que WhatsApp est installé\n" +
+                        "• Réessayez dans 2-3 minutes\n" +
+                        "• Ou utilisez la méthode QR Code avec /connect"
                     );
+                    
+                    // Nettoyer et échouer proprement
+                    await this.cleanup();
+                    throw new Error(`Échec pairing: ${error.message}`);
                 }
             }
-        }, 5000); // Augmenter le délai
+        }, 3000); // Réduire le délai initial
 
+        // Gestion des événements de connexion
         socket.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect, qr } = update;
             
+            // IGNORER complètement les QR codes - on veut uniquement pairing
             if (qr) {
-                log.info(`📱 QR généré comme fallback pour ${userId}`);
-                // Fallback QR si pairing échoue
-                await this.sendQRCodeViaHTTP(userId, qr, `pairing_fallback_${userId}`);
+                log.info(`⚠️ QR généré mais ignoré pour ${userId} (mode pairing uniquement)`);
+                return; // Ne rien faire avec le QR
             }
             
             if (connection === "open") {
                 clearTimeout(pairingTimeout);
+                pairingSuccess = true;
                 log.success(`✅ Connexion WhatsApp réussie via pairing pour ${userId}`);
                 await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
                 
@@ -176,18 +204,24 @@ async startPairingWithPhone(userId, userData, phoneNumber) {
                 const reason = lastDisconnect?.error;
                 log.error(`❌ Connexion fermée pour ${userId}:`, reason?.message);
                 
-                if (reason?.output?.statusCode === 401) {
-                    await this.sendMessageViaHTTP(userId,
-                        "❌ *Échec d'authentification*\n\n" +
-                        "Le code de pairing a expiré ou est invalide.\n" +
-                        "Réessayez avec /connect"
-                    );
-                } else {
-                    await this.sendMessageViaHTTP(userId,
-                        "❌ *Connexion interrompue*\n\n" +
-                        "Problème de réseau ou de connexion.\n" +
-                        "Réessayez avec /connect"
-                    );
+                if (!pairingSuccess) {
+                    let errorMessage = "❌ *Échec de connexion par pairing*\n\n";
+                    
+                    if (reason?.output?.statusCode === 401) {
+                        errorMessage += "Le code de pairing a expiré ou est invalide.\n";
+                    } else if (reason?.message?.includes('refs attempts ended')) {
+                        errorMessage += "Trop de tentatives. WhatsApp a bloqué temporairement.\n";
+                    } else {
+                        errorMessage += "Problème de réseau ou de connexion.\n";
+                    }
+                    
+                    errorMessage += "\nSolutions:\n";
+                    errorMessage += "• Vérifiez que le numéro est correct\n";
+                    errorMessage += "• Assurez-vous d'avoir WhatsApp d'installé\n";
+                    errorMessage += "• Réessayez dans quelques minutes\n";
+                    errorMessage += "• Contactez le support si le problème persiste";
+                    
+                    await this.sendMessageViaHTTP(userId, errorMessage);
                 }
             }
         });
@@ -196,25 +230,54 @@ async startPairingWithPhone(userId, userData, phoneNumber) {
 
         this.activePairings.set(userId, { socket, rl: null, userData });
 
-        return { success: true, method: 'pairing', message: 'Code de pairing généré' };
+        return { 
+            success: true, 
+            method: 'pairing', 
+            message: 'Processus pairing démarré',
+            phoneNumber: phoneNumber 
+        };
 
     } catch (error) {
         log.error('❌ Erreur processus pairing avec phone:', error);
         
-        // Informer l'utilisateur de l'erreur
-        await this.sendMessageViaHTTP(userId,
-            "❌ *Erreur de connexion*\n\n" +
-            "Impossible de démarrer le processus de pairing.\n" +
-            "Raisons possibles:\n" +
-            "• Service WhatsApp temporairement indisponible\n" +
-            "• Problème de réseau\n" +
-            "• Numéro invalide\n\n" +
-            "Réessayez ou contactez le support"
-        );
+        // Nettoyer les ressources
+        await this.cleanup();
+        
+        // Informer l'utilisateur de l'erreur spécifique
+        let errorMessage = "❌ *Erreur de connexion pairing*\n\n";
+        
+        if (error.message.includes('invalid phone number')) {
+            errorMessage += "Numéro de téléphone invalide.\n";
+        } else if (error.message.includes('timeout')) {
+            errorMessage += "Délai dépassé. Service WhatsApp temporairement indisponible.\n";
+        } else {
+            errorMessage += "Impossible de démarrer le processus de pairing.\n";
+        }
+        
+        errorMessage += "\nVeuillez réessayer ou utiliser la méthode QR Code.";
+        
+        await this.sendMessageViaHTTP(userId, errorMessage);
         
         throw error;
     }
-                  }
+}
+
+// Ajouter cette méthode pour nettoyer proprement
+async cleanupPairing(userId) {
+    try {
+        const pairing = this.activePairings.get(userId);
+        if (pairing && pairing.socket) {
+            await pairing.socket.end();
+        }
+        this.activePairings.delete(userId);
+        await this.cleanup();
+        log.info(`🧹 Pairing nettoyé pour ${userId}`);
+    } catch (error) {
+        log.error(`❌ Erreur nettoyage pairing ${userId}:`, error);
+    }
+                                                      }
+
+                
 
   async handlePairingCode(socket, userId, userData, question, rl) {
     try {

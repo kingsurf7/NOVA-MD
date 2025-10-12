@@ -699,10 +699,16 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
         phone_number = phone_input.replace('+', '').replace(' ', '').replace('-', '')
         
         # Validation du numéro
-        if not phone_number.isdigit() or len(phone_number) < 10:
+        if not phone_number.isdigit() or len(phone_number) < 8 or len(phone_number) > 15:
             await update.message.reply_text(
-                self.escape_markdown("❌ Numéro invalide\n\nVeuillez entrer un numéro valide (ex: 237612345678):"),
-                parse_mode='MarkdownV2'
+            self.escape_markdown("❌ Numéro invalide\n\n" +
+                                "Format attendu: 8 à 15 chiffres\n" +
+                                "Exemples:\n" +
+                                "• 237612345678 (12 chiffres)\n" +
+                                "• 14155552671 (11 chiffres)\n" +
+                                "• 33123456789 (11 chiffres)\n\n" +
+                                "Veuillez réessayer:"),
+            parse_mode='MarkdownV2'
             )
             return
     

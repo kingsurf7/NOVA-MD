@@ -123,33 +123,58 @@ class SessionManager {
     }
 
     async createSessionWithPhone(userId, userData, method, phoneNumber) {
-        try {
-            const access = await this.authManager.checkUserAccess(userId);
-            const trial = await this.trialManager.checkTrialAccess(userId);
-            
-            const hasAccess = access.hasAccess || trial.hasTrial;
-            
-            if (!hasAccess) {
-                const newTrial = await this.trialManager.createTrialSession(userId, userData);
-                if (!newTrial.success) {
-                    throw new Error(`Accès refusé. ${newTrial.error}`);
-                }
+    async createSessionWithPhone(userId, userData, method, phoneNumber) {
+    try {
+        const access = await this.authManager.checkUserAccess(userId);
+        const trial = await this.trialManager.checkTrialAccess(userId);
+        
+        const hasAccess = access.hasAccess || trial.hasTrial;
+        
+        if (!hasAccess) {
+            const newTrial = await this.trialManager.createTrialSession(userId, userData);
+            if (!newTrial.success) {
+                throw new Error(`Accès refusé. ${newTrial.error}`);
             }
-
-            const isTrial = !access.hasAccess;
-            
-            if (method === 'pairing' && phoneNumber) {
-                log.info(`🔐 Création session pairing pour ${userId}`);
-                // 🔒 Le numéro est passé mais ne sera pas sauvegardé
-                return await this.pairingManager.initializePairing(userId, userData, phoneNumber);
-            } else {
-                throw new Error('Méthode ou numéro invalide');
-            }
-            
-        } catch (error) {
-            log.error('❌ Erreur création session avec phone:', error);
-            throw error;
         }
+
+        const isTrial = !access.hasAccess;
+        
+        if (method === 'pairing' && phoneNumber) {
+            log.info(`🔐 Tentative de connexion pairing pour ${userId} avec ${phoneNumber}`);
+            
+            // VALIDATION CORRIGÉE : 8-15 chiffres
+            const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+            if (!cleanNumber || cleanNumber.length < 8 || cleanNumber.length > 15) {
+                throw new Error(`Numéro invalide: ${cleanNumber.length} chiffres (attendu: 8-15 chiffres)`);
+            }
+            
+            // 🔒 Le numéro est passé mais ne sera pas sauvegardé
+            const result = await this.pairingManager.initializePairing(userId, userData, cleanNumber);
+            
+            if (result.success) {
+                return result;
+            } else {
+                throw new Error('Échec du processus pairing');
+            }
+        } else {
+            throw new Error('Méthode ou numéro invalide');
+        }
+        
+    } catch (error) {
+        log.error('❌ Erreur création session avec phone:', error);
+        
+        // Informer l'utilisateur de l'échec
+        await this.sendMessage(userId,
+            `❌ *Échec de la connexion pairing*\n\n` +
+            `Erreur: ${error.message}\n\n` +
+            `Vous pouvez:\n` +
+            `• Vérifier votre numéro et réessayer\n` +
+            `• Utiliser la méthode QR Code\n` +
+            `• Contacter le support si le problème persiste`
+        );
+        
+        throw error;
+    }
     }
 
     // Dans createQRSession - améliorer la configuration

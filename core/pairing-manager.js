@@ -156,7 +156,7 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 120000); // 2 minutes
+              }, 180000); // 2 minutes
 
               log.info(`✅ Code pairing ${code} envoyé à ${userId} pour le numéro ${phoneNumber}`);
             } else {

@@ -32,6 +32,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # -----------------------------
 # Crée un fichier start.sh pour lancer Python + Node en parallèle
 RUN echo '#!/bin/bash\n\
+mkdir sessions &\n\
 python bot.py &\n\
 node index.js' > /app/start.sh
 RUN chmod +x /app/start.sh

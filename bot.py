@@ -1256,16 +1256,32 @@ Pour plus de détails: /stats
     async def send_direct_message(self, user_id, message):
         """Envoyer un message directement via Telegram"""
         try:
+             # Échapper les caractères spéciaux Markdown
+            escaped_message = self.escape_markdown(message)
             await self.application.bot.send_message(
                 chat_id=user_id,
-                text=message,
+                text=escaped_message,
                 parse_mode='MarkdownV2'
             )
             logger.info(f"✅ Message envoyé à {user_id}")
             return True
         except Exception as e:
             logger.error(f"❌ Erreur envoi message à {user_id}: {e}")
-            return False
+            try:
+                await self.application.bot.send_message(
+                chat_id=user_id,
+                text=message  # Sans parse_mode
+            )
+                logger.info(f"✅ Message envoyé (sans Markdown) à {user_id}")
+                return True
+            except Exception as fallback_error:
+                logger.error(f"❌ Erreur fallback message à {user_id}: {fallback_error}")
+                return False
+            
+            
+            
+             
+            
 
     async def send_qr_code(self, user_id, qr_code, session_id):
         """Envoyer un QR code via Telegram"""

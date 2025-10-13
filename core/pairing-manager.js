@@ -72,7 +72,7 @@ class PairingManager {
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 45000,
+        connectTimeoutMs: 450000,
         mobile: false
       });
 
@@ -117,10 +117,10 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 45000,
-        defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 15000,
-        retryRequestDelayMs: 2500,
+        connectTimeoutMs: 90000,
+        defaultQueryTimeoutMs: 120000,
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 5000,
         maxRetries: 3,
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
@@ -132,7 +132,7 @@ class PairingManager {
         },
         transactionOpts: {
           maxCommitRetries: 2,
-          delayBeforeRetry: 1000
+          delayBeforeRetry: 2000
         },
         getMessage: async () => undefined
       });
@@ -181,25 +181,12 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 180000);
+              }, 480000);
 
               log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
               
               // Envoyer des instructions détaillées
-              await this.sendMessageViaHTTP(userId,
-                `🔐 *CODE DE PAIRING WhatsApp* 🔐\n\n` +
-                `📱 *Votre code:* \`${pairingCode}\`\n` +
-                `📞 *Pour le numéro:* ${phoneNumber}\n\n` +
-                `*📋 INSTRUCTIONS DÉTAILLÉES:*\n` +
-                `1. 📲 Ouvrez WhatsApp sur votre téléphone\n` +
-                `2. ⚙️ Allez dans *Paramètres* (icône engrenage)\n` +
-                `3. 🔗 Appareils liés → Lier un appareil\n` +
-                `4. 🔢 Appuyez sur *Lier avec numéro de pairing*\n` +
-                `5. ⌨️ Entrez le code exact: *${pairingCode}*\n` +
-                `6. ✅ Attendez la confirmation\n\n` +
-                `⏱️ *Ce code expire dans 3 minutes*\n` +
-                `💡 *Conseil:* Utilisez le code immédiatement!`
-              );
+              
               
             } else {
               throw new Error('Échec envoi du code pairing');

@@ -1,5 +1,5 @@
 const { createClient } = require('@supabase/supabase-js');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay } = require("@whiskeysockets/baileys");
 const P = require("pino");
 const config = require('../config');
 const AuthManager = require('./auth-manager');
@@ -185,7 +185,7 @@ class SessionManager {
 
             const { state, saveCreds } = await useMultiFileAuthState(authDir);
             
-            // Configuration améliorée pour WhatsApp Web
+            // CONFIGURATION AMÉLIORÉE - Timeouts augmentés
             const sock = makeWASocket({
                 auth: state,
                 logger: P({ level: "silent" }),
@@ -195,9 +195,13 @@ class SessionManager {
                 markOnlineOnConnect: true,
                 generateHighQualityLinkPreview: true,
                 emitOwnEvents: true,
-                defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 30000,
-                keepAliveIntervalMs: 15000
+                defaultQueryTimeoutMs: 120000, // Augmenté à 2 minutes
+                connectTimeoutMs: 120000, // Augmenté à 2 minutes
+                keepAliveIntervalMs: 30000, // Ping toutes les 30 secondes
+                maxRetries: 5, // Plus de tentatives
+                retryDelayMs: 5000, // Délai entre les tentatives
+                fireInitQueries: true,
+                mobile: false
             });
 
             this.sessions.set(sessionId, {
@@ -210,7 +214,8 @@ class SessionManager {
                 subscriptionActive: isPayedUser,
                 connectionMethod: 'qr',
                 createdAt: new Date(),
-                lastActivity: new Date()
+                lastActivity: new Date(),
+                qrGenerated: false
             });
 
             await this.supabase
@@ -240,6 +245,9 @@ class SessionManager {
     }
 
     setupSocketEvents(sock, sessionId, userId) {
+        let qrTimeout;
+        let connectionTimeout;
+
         sock.ev.on("connection.update", async (update) => {
             const { connection, qr, lastDisconnect, isNewLogin, isOnline } = update;
 
@@ -250,10 +258,37 @@ class SessionManager {
                 isOnline
             });
 
+            // Nettoyer les timeouts précédents
+            if (qrTimeout) clearTimeout(qrTimeout);
+            if (connectionTimeout) clearTimeout(connectionTimeout);
+
             if (qr) {
                 log.info(`📱 QR généré pour ${userId} (${qr.length} caractères)`);
                 await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
                 
+                const session = this.sessions.get(sessionId);
+                if (session) {
+                    session.qrGenerated = true;
+                    session.qrTimestamp = Date.now();
+                }
+
+                // Timeout QR augmenté à 5 minutes
+                qrTimeout = setTimeout(async () => {
+                    const session = this.sessions.get(sessionId);
+                    if (session && session.status === 'qr_generated') {
+                        log.warn(`⏰ QR Timeout pour ${userId}`);
+                        await this.sendMessage(userId, 
+                            "⏰ *QR Code expiré*\n\n" +
+                            "Le QR code a expiré après 5 minutes.\n\n" +
+                            "Veuillez:\n" +
+                            "• Redémarrer la connexion avec /connect\n" +
+                            "• Scanner le nouveau QR code rapidement\n" +
+                            "• Utiliser la méthode Pairing Code si le problème persiste"
+                        );
+                        await this.disconnectSession(sessionId);
+                    }
+                }, 300000); // 5 minutes
+
                 // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
                 await this.sendQRCode(userId, qr, sessionId);
             }
@@ -270,6 +305,26 @@ class SessionManager {
             
             if (isNewLogin) {
                 log.info(`🔄 Nouvelle connexion détectée pour ${userId}`);
+            }
+
+            // Timeout de connexion général augmenté à 10 minutes
+            if (connection === "connecting" && !qr) {
+                connectionTimeout = setTimeout(async () => {
+                    const session = this.sessions.get(sessionId);
+                    if (session && session.status !== 'connected') {
+                        log.warn(`⏰ Connexion timeout pour ${userId}`);
+                        await this.sendMessage(userId,
+                            "⏰ *Timeout de connexion*\n\n" +
+                            "La connexion a pris trop de temps.\n\n" +
+                            "Causes possibles:\n" +
+                            "• Problème réseau\n" +
+                            "• Serveurs WhatsApp surchargés\n" +
+                            "• Blocage temporaire\n\n" +
+                            "Veuillez réessayer dans 2-3 minutes."
+                        );
+                        await this.disconnectSession(sessionId);
+                    }
+                }, 600000); // 10 minutes
             }
         });
 

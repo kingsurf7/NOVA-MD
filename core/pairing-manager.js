@@ -410,78 +410,92 @@ class PairingManager {
     }
   }
 
+  // MODIFIER la méthode handleSuccessfulPairing
   async handleSuccessfulPairing(socket, userId, userData, saveCreds, rl) {
     try {
-      const sessionId = `pairing_${userId}_${Date.now()}`;
-      const authDir = `./sessions/${sessionId}`;
+        const sessionId = `pairing_${userId}_${Date.now()}`;
+        const authDir = `./sessions/${sessionId}`;
 
-      await fs.copy(path.join(__dirname, this.sessionName), authDir);
-      await this.cleanup();
+        await fs.copy(path.join(__dirname, this.sessionName), authDir);
+        await this.cleanup();
 
-      const access = await this.sessionManager.authManager.checkUserAccess(userId);
-      const isPayedUser = access.hasAccess;
+        const access = await this.sessionManager.authManager.checkUserAccess(userId);
+        const isPayedUser = access.hasAccess;
 
-      const sessionData = {
-        socket: socket,
-        userId: userId,
-        userData: userData,
-        authDir: authDir,
-        saveCreds: saveCreds,
-        status: 'connected',
-        subscriptionActive: isPayedUser,
-        connectionMethod: 'pairing',
-        createdAt: new Date(),
-        lastActivity: new Date()
-      };
+        const sessionData = {
+            socket: socket,
+            userId: userId,
+            userData: userData,
+            authDir: authDir,
+            saveCreds: saveCreds,
+            status: 'connected',
+            subscriptionActive: isPayedUser,
+            connectionMethod: 'pairing',
+            createdAt: new Date(),
+            lastActivity: new Date()
+        };
 
-      this.sessionManager.sessions.set(sessionId, sessionData);
+        this.sessionManager.sessions.set(sessionId, sessionData);
 
-      await this.sessionManager.supabase
-        .from('whatsapp_sessions')
-        .insert([{
-          session_id: sessionId,
-          user_id: userId,
-          user_data: userData,
-          status: 'connected',
-          subscription_active: isPayedUser,
-          connection_method: 'pairing',
-          created_at: new Date().toISOString(),
-          connected_at: new Date().toISOString(),
-          last_activity: new Date().toISOString()
-        }]);
+        await this.sessionManager.supabase
+            .from('whatsapp_sessions')
+            .insert([{
+                session_id: sessionId,
+                user_id: userId,
+                user_data: userData,
+                status: 'connected',
+                subscription_active: isPayedUser,
+                connection_method: 'pairing',
+                created_at: new Date().toISOString(),
+                connected_at: new Date().toISOString(),
+                last_activity: new Date().toISOString()
+            }]);
 
-      // Nettoyer le compteur de tentatives
-      this.retryCounts.delete(userId);
-      this.activePairings.delete(userId);
-      if (rl) rl.close();
+        // Nettoyer le compteur de tentatives
+        this.retryCounts.delete(userId);
+        this.activePairings.delete(userId);
+        if (rl) rl.close();
 
-      // CORRECTION DE LA SYNTAXE DU MESSAGE
-      let message = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
-      message += `✅ Méthode: Code de Pairing\n`;
-      message += `👤 Compte: ${socket.user?.name || socket.user?.id}\n`;
-      
-      if (isPayedUser) {
-        message += `📱 Statut: Session PERMANENTE\n\n`;
-        message += `💎 *ABONNEMENT ACTIF*\n`;
-        message += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
-        message += `🔐 Session maintenue automatiquement\n\n`;
-      } else {
-        message += `📱 Statut: Session d'essai\n\n`;
-      }
-      
-      message += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
-      message += `Utilisez !help sur WhatsApp pour voir les commandes.`;
+        // ENVOYER UN MESSAGE DE BIENVENUE SUR WHATSAPP
+        let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
+        whatsappMessage += `✅ Méthode: Code de Pairing\n`;
+        whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id}\n`;
+        
+        if (isPayedUser) {
+            whatsappMessage += `📱 Statut: Session PERMANENTE\n\n`;
+            whatsappMessage += `💎 *ABONNEMENT ACTIF*\n`;
+            whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
+            whatsappMessage += `🔐 Session maintenue automatiquement\n\n`;
+        } else {
+            whatsappMessage += `📱 Statut: Session d'essai\n\n`;
+        }
+        
+        whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
+        whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
 
-      await this.sendMessageViaHTTP(userId, message);
-      log.success(`✅ Message de succès envoyé à ${userId}`);
+        // Envoyer le message sur WhatsApp
+        try {
+            await socket.sendMessage(socket.user.id, { text: whatsappMessage });
+            log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
+        } catch (whatsappError) {
+            log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
+        }
 
-      log.success(`🎯 Session pairing créée: ${sessionId}`);
+        // AUSSI ENVOYER VIA TELEGRAM
+        await this.sendMessageViaHTTP(userId, 
+            `✅ *Connexion WhatsApp réussie via Pairing!*\n\n` +
+            `Votre session est maintenant active.\n` +
+            `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
+        );
+
+        log.success(`🎯 Session pairing créée: ${sessionId}`);
 
     } catch (error) {
-      log.error('❌ Erreur gestion pairing réussi:', error);
-      if (rl) rl.close();
+        log.error('❌ Erreur gestion pairing réussi:', error);
+        if (rl) rl.close();
     }
-  }
+}
+  
 
   async handleConnectionClose(sessionId, lastDisconnect, userId, rl) {
     const pairing = this.activePairings.get(userId);

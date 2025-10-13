@@ -72,7 +72,9 @@ class PairingManager {
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 450000,
+        connectTimeoutMs: 300000, // Augmenté à 5 minutes
+        defaultQueryTimeoutMs: 120000,
+        keepAliveIntervalMs: 30000,
         mobile: false
       });
 
@@ -109,7 +111,7 @@ class PairingManager {
     const { state, saveCreds } = await useMultiFileAuthState("./" + this.sessionName);
     
     try {
-      // CONFIGURATION ULTRA-STABLE pour WhatsApp
+      // CONFIGURATION ULTRA-STABLE pour WhatsApp - Timeouts augmentés
       const socket = makeWASocket({
         logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu('Chrome'),
@@ -117,11 +119,11 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 90000,
+        connectTimeoutMs: 300000, // Augmenté à 5 minutes
         defaultQueryTimeoutMs: 120000,
         keepAliveIntervalMs: 30000,
         retryRequestDelayMs: 5000,
-        maxRetries: 3,
+        maxRetries: 5, // Plus de tentatives
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
         fireInitQueries: false,
@@ -131,7 +133,7 @@ class PairingManager {
           snapshot: false
         },
         transactionOpts: {
-          maxCommitRetries: 2,
+          maxCommitRetries: 3,
           delayBeforeRetry: 2000
         },
         getMessage: async () => undefined
@@ -144,7 +146,7 @@ class PairingManager {
       
       const currentRetryCount = this.retryCounts.get(userId) || 0;
       
-      // Timeout pour générer le code pairing
+      // Timeout pour générer le code pairing augmenté à 30 secondes
       const pairingTimeout = setTimeout(async () => {
         if (!pairingCodeSent && currentRetryCount < 3) {
           try {
@@ -165,13 +167,13 @@ class PairingManager {
             if (sent) {
               pairingCodeSent = true;
               
-              // Démarrer un timeout de connexion (3 minutes)
+              // Démarrer un timeout de connexion augmenté à 8 minutes
               connectionTimeout = setTimeout(async () => {
                 if (!pairingSuccess) {
                   log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
                   await this.sendMessageViaHTTP(userId,
                     "⏰ *Timeout de connexion*\n\n" +
-                    "Le code de pairing n'a pas été utilisé dans les 3 minutes.\n\n" +
+                    "Le code de pairing n'a pas été utilisé dans les 8 minutes.\n\n" +
                     "Le code a expiré. Veuillez:\n" +
                     "1. Redémarrer le processus avec /connect\n" +
                     "2. Choisir à nouveau 'Pairing Code'\n" +
@@ -181,12 +183,23 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 480000);
+              }, 480000); // 8 minutes
 
               log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
               
               // Envoyer des instructions détaillées
-              
+              await this.sendMessageViaHTTP(userId,
+                `🔐 *Code de Pairing Généré!*\n\n` +
+                `📱 Pour: ${phoneNumber}\n` +
+                `🔑 Votre code: *${pairingCode}*\n\n` +
+                `*Instructions:*\n` +
+                `1. Ouvrez WhatsApp sur votre téléphone\n` +
+                `2. Allez dans Paramètres → Appareils liés\n` +
+                `3. Sélectionnez "Lier un appareil"\n` +
+                `4. Entrez le code ci-dessus\n` +
+                `5. Attendez la confirmation\n\n` +
+                `⏱️ *Ce code expire dans 8 minutes*`
+              );
               
             } else {
               throw new Error('Échec envoi du code pairing');
@@ -205,10 +218,10 @@ class PairingManager {
                 `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`
               );
               
-              // Réessayer après 3 secondes
+              // Réessayer après 5 secondes
               setTimeout(() => {
                 this.startPairingWithPhone(userId, userData, phoneNumber);
-              }, 3000);
+              }, 5000);
               return;
             }
             
@@ -229,7 +242,7 @@ class PairingManager {
             await this.cleanupPairing(userId);
           }
         }
-      }, 1000);
+      }, 5000); // Augmenté à 5 secondes
 
       // Gestion des événements de connexion
       socket.ev.on("connection.update", async (update) => {

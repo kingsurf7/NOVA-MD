@@ -461,18 +461,21 @@ class PairingManager {
       this.activePairings.delete(userId);
       if (rl) rl.close();
 
-      let message = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\\n\\n`;
-      message += `✅ Méthode: Code de Pairing\\n`;
-      message += `👤 Compte: ${socket.user?.name || socket.user?.id}\\n`;
-      message += `📱 Statut: Session ${isPayedUser ? 'PERMANENTE' : 'd\\'essai'}\\n\\n`;
+      // CORRECTION DE LA SYNTAXE DU MESSAGE
+      let message = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
+      message += `✅ Méthode: Code de Pairing\n`;
+      message += `👤 Compte: ${socket.user?.name || socket.user?.id}\n`;
       
-      if (sessionData.subscriptionActive) {
-        message += `💎 *ABONNEMENT ACTIF*\\n`;
-        message += `📅 Jours restants: ${access.daysLeft || '30'}\\n`;
-        message += `🔐 Session maintenue automatiquement\\n\\n`;
+      if (isPayedUser) {
+        message += `📱 Statut: Session PERMANENTE\n\n`;
+        message += `💎 *ABONNEMENT ACTIF*\n`;
+        message += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
+        message += `🔐 Session maintenue automatiquement\n\n`;
+      } else {
+        message += `📱 Statut: Session d'essai\n\n`;
       }
       
-      message += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\\n`;
+      message += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
       message += `Utilisez !help sur WhatsApp pour voir les commandes.`;
 
       await this.sendMessageViaHTTP(userId, message);

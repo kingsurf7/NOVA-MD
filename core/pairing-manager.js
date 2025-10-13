@@ -111,13 +111,7 @@ class PairingManager {
     try {
       // CONFIGURATION ULTRA-STABLE pour WhatsApp
       const socket = makeWASocket({
-        logger: pino({ 
-          level: "error",
-          transport: {
-            target: 'pino-pretty',
-            options: { colorize: true }
-          }
-        }),
+        logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
         syncFullHistory: false,

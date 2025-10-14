@@ -27,17 +27,44 @@ class NovaMDApp {
     }
 
     
-    async initialize() {
-        await this.commandHandler.loadBuiltInCommands();
+    // AJOUTER cette méthode pour charger les commandes WhatsApp
+	async loadWhatsAppCommands() {
+		try {
+    		const commandsPath = path.join(__dirname, './commands');
+    		const files = fs.readdirSync(commandsPath);
         
-        // Tester la connexion avec le bot Python
-        await this.testBotConnection();
-        
-        log.success("🚀 NOVA-MD initialisé avec sessions persistantes");
-        
-        this.setupBackgroundServices();
-    }
+    		for (const file of files) {
+        		if (file.endsWith('.js')) {
+            		try {
+                		const commandPath = path.join(commandsPath, file);
+                		const command = require(commandPath);
+                    
+                		if (command.name && command.run) {
+                    		this.commands.set(command.name, command);
+                    		log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
+                		}
+            		} catch (error) {
+                		log.error(`❌ Erreur chargement commande ${file}:`, error);
+            		}
+        		}
+    		}
+		} catch (error) {
+    		log.error('❌ Erreur chargement commandes WhatsApp:', error);
+		}
+	}
 
+	// MODIFIER la méthode initialize
+	async initialize() {
+		await this.loadWhatsAppCommands(); // AJOUTER cette ligne
+		await this.commandHandler.loadBuiltInCommands();
+    
+		// Tester la connexion avec le bot Python
+		await this.testBotConnection();
+    
+		log.success("🚀 NOVA-MD initialisé avec sessions persistantes");
+    
+		this.setupBackgroundServices();
+	}
     async testBotConnection() {
         try {
             const response = await fetch(`${this.botWebhookUrl.replace('/webhook', '')}/health`);

@@ -1,6 +1,8 @@
 const { createClient } = require('@supabase/supabase-js');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay } = require("@whiskeysockets/baileys");
 const P = require("pino");
+const path = require('path');
+const fs = require('fs-extra');
 const config = require('../config');
 const AuthManager = require('./auth-manager');
 const PairingManager = require('./pairing-manager');
@@ -17,9 +19,11 @@ class SessionManager {
         this.userSettings = new Map();
         this.telegramBot = null;
         this.nodeApiUrl = process.env.NODE_API_URL || 'http://localhost:3000';
+        this.commands = new Map();
         
         this.loadUserSettings();
         this.setupSessionMaintenance();
+        this.initializeWhatsAppCommands();
     }
 
     setTelegramBot(bot) {
@@ -367,20 +371,33 @@ class SessionManager {
                 connected_at: new Date().toISOString()
             });
 
-            let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
-            message += `Utilisateur: ${user.name || user.id}\\n`;
-            message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\\n`;
+            let message = `✅ *Connexion WhatsApp Réussie!*\n\n`;
+            message += `Utilisateur: ${user.name || user.id}\n`;
+            message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\n`;
             
             if (session.subscriptionActive) {
                 const access = await this.authManager.checkUserAccess(userId);
-                message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\\n`;
-                message += `\\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
+                message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\n`;
+                message += `\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
             }
             
-            message += `\\n\\nVous pouvez maintenant utiliser le bot!`;
+            message += `\n\nVous pouvez maintenant utiliser le bot!`;
+            message += `\n\nTapez *!help* pour voir les commandes disponibles.`;
 
-            await this.sendMessage(userId, message);
-            log.success(`✅ Message de connexion envoyé à ${userId}`);
+            // ENVOYER LE MESSAGE SUR WHATSAPP DIRECTEMENT
+            try {
+                await sock.sendMessage(sock.user.id, { text: message });
+                log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
+            } catch (whatsappError) {
+                log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
+            }
+
+            // AUSSI ENVOYER VIA TELEGRAM POUR CONFIRMATION
+            await this.sendMessage(userId, 
+                `✅ *Connexion WhatsApp réussie!*\n\n` +
+                `Votre session est maintenant active.\n` +
+                `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
+            );
 
             log.success(`🎯 Session ${sessionId} complètement initialisée`);
 
@@ -405,13 +422,31 @@ class SessionManager {
     async handleWhatsAppMessage(message, sessionId) {
         try {
             const session = this.sessions.get(sessionId);
-            if (!session) return;
+            if (!session) {
+                log.error(`❌ Session ${sessionId} non trouvée pour message`);
+                return;
+            }
+
+            // Vérifier que le socket est valide
+            if (!session.socket || !session.socket.user) {
+                log.error(`❌ Socket invalide pour session ${sessionId}`);
+                return;
+            }
 
             const text = message.message?.conversation || 
                         message.message?.extendedTextMessage?.text || '';
             const sender = message.key.remoteJid;
+            
+            // Ignorer les messages vides ou des messages système
+            if (!text || message.key.fromMe) {
+                return;
+            }
+
+            log.info(`📨 Message WhatsApp de ${sender}: ${text.substring(0, 50)}`);
+
             const userSettings = this.getUserSetting(session.userId);
             
+            // Vérifier le mode privé
             if (userSettings.private_mode) {
                 const allowedUsers = userSettings.allowed_users || [];
                 const senderNumber = sender.split('@')[0];
@@ -428,8 +463,16 @@ class SessionManager {
                 }
             }
 
+            // Gérer les commandes
             if (text.startsWith('!')) {
                 await this.handleWhatsAppCommand(text, message, sessionId, userSettings);
+            } else {
+                // Répondre aux messages normaux
+                if (!userSettings.silent_mode) {
+                    await session.socket.sendMessage(sender, {
+                        text: `🤖 *NOVA-MD Bot*\n\nPour voir les commandes disponibles, tapez:\n*!help*`
+                    });
+                }
             }
 
         } catch (error) {
@@ -445,185 +488,278 @@ class SessionManager {
             const args = commandText.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
             
-            if (command === 'silent') {
-                await this.handleSilentCommand(args, sender, session, userSettings);
-                return;
-            }
-            
-            if (command === 'private') {
-                await this.handlePrivateCommand(args, sender, session, userSettings);
-                return;
-            }
-            
-            if (command === 'settings') {
-                await this.handleSettingsCommand(sender, session, userSettings);
-                return;
-            }
-            
-            if (command === 'help') {
-                await this.handleHelpCommand(sender, session, userSettings);
-                return;
-            }
+            // Créer le contexte pour la commande
+            const context = {
+                sock: session.socket,
+                msg: message,
+                args: args,
+                sessionManager: this,
+                commands: this.commands
+            };
 
-            await this.executeWhatsAppCommand(command, args, message, sessionId, userSettings);
+            // Exécuter la commande si elle existe
+            const commandHandler = this.commands.get(command);
+            if (commandHandler && commandHandler.run) {
+                await commandHandler.run(context);
+            } else {
+                // Commande non trouvée
+                if (!userSettings.silent_mode) {
+                    await session.socket.sendMessage(sender, {
+                        text: "❌ *Commande inconnue*\n\nUtilisez `!help` pour voir les commandes disponibles."
+                    });
+                }
+            }
             
         } catch (error) {
             log.error('❌ Erreur commande WhatsApp:', error);
+            if (!userSettings.silent_mode) {
+                await session.socket.sendMessage(sender, {
+                    text: "❌ *Erreur lors de l'exécution de la commande*"
+                });
+            }
         }
     }
 
-    async handleSilentCommand(args, sender, session, userSettings) {
-        const newSilentMode = !userSettings.silent_mode;
-        
-        await this.saveUserSetting(session.userId, {
-            silent_mode: newSilentMode
-        });
-        
-        const responseText = newSilentMode ?
-            "🔇 *Mode silencieux activé*\n\nToutes les commandes sont maintenant invisibles pour les autres.\nSeul vous verrez les résultats." :
-            "🔊 *Mode silencieux désactivé*\n\nLes commandes sont maintenant visibles par tous.";
+    async initializeWhatsAppCommands() {
+        try {
+            // Charger les commandes de base
+            const commandsPath = path.join(__dirname, '../commands');
             
-        await this.sendMessageWithMode(sender, session, responseText, userSettings);
-    }
+            // Créer le dossier commands s'il n'existe pas
+            if (!fs.existsSync(commandsPath)) {
+                fs.mkdirSync(commandsPath, { recursive: true });
+                log.info('📁 Dossier commands créé');
+            }
 
-    async handlePrivateCommand(args, sender, session, userSettings) {
-        const newPrivateMode = !userSettings.private_mode;
-        let responseText = "";
-        
-        if (newPrivateMode && args.length > 0) {
-            const users = args.map(u => u.replace('+', '').replace(/\D/g, ''));
-            await this.saveUserSetting(session.userId, {
-                private_mode: true,
-                allowed_users: users
-            });
-            responseText = `🔒 *Mode privé activé*\n\nUtilisateurs autorisés: ${users.join(', ')}\n\nSeules ces personnes peuvent utiliser le bot.`;
-        } else if (newPrivateMode) {
-            await this.saveUserSetting(session.userId, {
-                private_mode: true,
-                allowed_users: ['all']
-            });
-            responseText = "🔒 *Mode privé activé*\n\nTout le monde peut utiliser le bot pour le moment.\nUtilisez `!private +237612345678 +237698765432` pour restreindre à des numéros spécifiques.";
-        } else {
-            await this.saveUserSetting(session.userId, {
-                private_mode: false,
-                allowed_users: []
-            });
-            responseText = "🔓 *Mode privé désactivé*\n\nTout le monde peut maintenant utiliser le bot.";
+            // Créer les commandes de base si elles n'existent pas
+            await this.createDefaultCommands();
+            
+            // Charger toutes les commandes
+            const files = fs.readdirSync(commandsPath);
+            
+            for (const file of files) {
+                if (file.endsWith('.js')) {
+                    try {
+                        const commandPath = path.join(commandsPath, file);
+                        const command = require(commandPath);
+                        
+                        if (command.name && command.run) {
+                            this.commands.set(command.name, command);
+                            
+                            if (command.aliases && Array.isArray(command.aliases)) {
+                                command.aliases.forEach(alias => {
+                                    this.commands.set(alias, command);
+                                });
+                            }
+                            
+                            log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
+                        }
+                    } catch (error) {
+                        log.error(`❌ Erreur chargement commande ${file}:`, error);
+                    }
+                }
+            }
+            
+            log.success('✅ Commandes WhatsApp initialisées');
+        } catch (error) {
+            log.error('❌ Erreur initialisation commandes WhatsApp:', error);
         }
+    }
+
+    async createDefaultCommands() {
+        const commandsPath = path.join(__dirname, '../commands');
         
-        await this.sendMessageWithMode(sender, session, responseText, userSettings);
-    }
+        const defaultCommands = {
+            'help.js': `
+const log = require('../utils/logger')(module);
 
-    async handleSettingsCommand(sender, session, userSettings) {
-        const settingsText = `⚙️ *Paramètres de votre bot*
+module.exports = {
+    name: 'help',
+    description: "Affiche le menu d'aide",
+    category: 'information',
+    aliases: ['aide', 'menu'],
+    
+    run: async (context) => {
+        try {
+            const { sock, msg } = context;
+            const remoteJid = msg.key.remoteJid;
+            
+            const helpText = \\\`🤖 *Commandes NOVA-MD WhatsApp*
 
-🔇 Mode silencieux: ${userSettings.silent_mode ? '✅ Activé' : '❌ Désactivé'}
-🔒 Mode privé: ${userSettings.private_mode ? '✅ Activé' : '❌ Désactivé'}
-
-${userSettings.private_mode ? `👥 Utilisateurs autorisés: ${userSettings.allowed_users?.join(', ') || 'Tout le monde'}` : ''}
-
-*Commandes disponibles:*
+⚙️ *Configuration:*
 !silent - Activer/désactiver le mode silencieux
-!private - Gérer l'accès au bot
-!private +237612345678 - Autoriser un numéro spécifique
-!private all - Autoriser tout le monde
-!settings - Voir ces paramètres
-!help - Voir toutes les commandes`;
-
-        await this.sendMessageWithMode(sender, session, settingsText, userSettings);
-    }
-
-    async handleHelpCommand(sender, session, userSettings) {
-        const helpText = `🤖 *Commandes NOVA-MD WhatsApp*
-
-⚙️ *Commandes de configuration:*
-!silent - Rendre les commandes invisibles
 !private - Contrôler qui peut utiliser le bot
 !settings - Voir les paramètres
-!help - Afficher cette aide
 
-📊 *Commandes d'information:*
+📊 *Information:*
 !status - Statut de votre session
 !info - Informations du bot
 
-🔧 *Commandes utilitaires:*
+🔧 *Utilitaires:*
 !ping - Tester la connexion
 !time - Heure actuelle
 
-*Astuce:* Utilisez \`!silent\` pour que seul vous voyez les réponses.`;
+💡 *Astuce:* Utilisez \\\\\`!silent\\\\\` pour que seul vous voyez les réponses.\\\`;
 
-        await this.sendMessageWithMode(sender, session, helpText, userSettings);
+            await sock.sendMessage(remoteJid, { text: helpText });
+            log.info(\\\`✅ Help command executed for \\\${remoteJid}\\\`);
+            
+        } catch (error) {
+            log.error(\\\`❌ Erreur commande help: \\\${error.message}\\\`);
+        }
     }
+};
+            `,
+            'ping.js': `
+const log = require('../utils/logger')(module);
 
-    async executeWhatsAppCommand(command, args, message, sessionId, userSettings) {
-        const session = this.sessions.get(sessionId);
-        const sender = message.key.remoteJid;
-        
-        switch (command) {
-            case 'status':
-                const statusText = `📊 *Statut de votre session*
+module.exports = {
+    name: 'ping',
+    description: "Test de connexion",
+    category: 'utility',
+    
+    run: async (context) => {
+        try {
+            const { sock, msg } = context;
+            const remoteJid = msg.key.remoteJid;
+            const start = Date.now();
+            
+            await sock.sendMessage(remoteJid, { text: "🏓 *Pong!*" });
+            const latency = Date.now() - start;
+            
+            await sock.sendMessage(remoteJid, { 
+                text: \\\`🏓 *Pong!*\\\\nLatence: \\\${latency}ms\\\` 
+            });
+            
+            log.info(\\\`✅ Ping command executed - Latency: \\\${latency}ms\\\`);
+            
+        } catch (error) {
+            log.error(\\\`❌ Erreur commande ping: \\\${error.message}\\\`);
+        }
+    }
+};
+            `,
+            'status.js': `
+const log = require('../utils/logger')(module);
 
-🔐 Type: ${session.subscriptionActive ? 'Session permanente' : 'Session essai'}
-📱 Connecté depuis: ${Math.round((Date.now() - session.createdAt) / (1000 * 60 * 60 * 24))} jours
-⚙️ Mode silencieux: ${userSettings.silent_mode ? '✅ Activé' : '❌ Désactivé'}
-🔒 Accès restreint: ${userSettings.private_mode ? '✅ Activé' : '❌ Désactivé'}
-
-💡 Utilisez \`!settings\` pour modifier les paramètres.`;
-                await this.sendMessageWithMode(sender, session, statusText, userSettings);
-                break;
+module.exports = {
+    name: 'status',
+    description: "Statut de la session",
+    category: 'information',
+    
+    run: async (context) => {
+        try {
+            const { sock, msg, sessionManager } = context;
+            const remoteJid = msg.key.remoteJid;
+            
+            // Trouver la session
+            const session = Array.from(sessionManager.sessions.values())
+                .find(s => s.socket === sock);
                 
-            case 'info':
-                const infoText = `🤖 *NOVA-MD Premium*
+            if (session) {
+                const statusText = \\\`📊 *Statut de votre session*
 
-Version: ${config.bot.version}
+🔐 Type: \\\${session.subscriptionActive ? 'Session permanente' : 'Session essai'}
+📱 Connecté depuis: \\\${Math.round((Date.now() - session.createdAt) / (1000 * 60 * 60 * 24))} jours
+👤 Utilisateur ID: \\\${session.userId}\\\`;
+                
+                await sock.sendMessage(remoteJid, { text: statusText });
+                log.info(\\\`✅ Status command executed for \\\${session.userId}\\\`);
+            } else {
+                await sock.sendMessage(remoteJid, { 
+                    text: "❌ Session non trouvée" 
+                });
+            }
+            
+        } catch (error) {
+            log.error(\\\`❌ Erreur commande status: \\\${error.message}\\\`);
+        }
+    }
+};
+            `,
+            'silent.js': `
+const log = require('../utils/logger')(module);
+
+module.exports = {
+    name: 'silent',
+    description: "Activer/désactiver le mode silencieux",
+    category: 'configuration',
+    
+    run: async (context) => {
+        try {
+            const { sock, msg, sessionManager } = context;
+            const remoteJid = msg.key.remoteJid;
+            
+            // Trouver la session
+            const session = Array.from(sessionManager.sessions.values())
+                .find(s => s.socket === sock);
+                
+            if (session) {
+                const userSettings = sessionManager.getUserSetting(session.userId);
+                const newSilentMode = !userSettings.silent_mode;
+                
+                await sessionManager.saveUserSetting(session.userId, {
+                    silent_mode: newSilentMode
+                });
+                
+                const responseText = newSilentMode ?
+                    "🔇 *Mode silencieux activé*\\\\n\\\\nToutes les commandes sont maintenant invisibles pour les autres.\\\\nSeul vous verrez les résultats." :
+                    "🔊 *Mode silencieux désactivé*\\\\n\\\\nLes commandes sont maintenant visibles par tous.";
+                    
+                await sock.sendMessage(remoteJid, { text: responseText });
+                log.info(\\\`✅ Silent mode \\\${newSilentMode ? 'activated' : 'deactivated'} for \\\${session.userId}\\\`);
+            }
+            
+        } catch (error) {
+            log.error(\\\`❌ Erreur commande silent: \\\${error.message}\\\`);
+        }
+    }
+};
+            `,
+            'info.js': `
+const log = require('../utils/logger')(module);
+const config = require('../config');
+
+module.exports = {
+    name: 'info',
+    description: "Informations du bot",
+    category: 'information',
+    
+    run: async (context) => {
+        try {
+            const { sock, msg } = context;
+            const remoteJid = msg.key.remoteJid;
+            
+            const infoText = \\\`🤖 *NOVA-MD Premium*
+
+Version: \\\${config.bot.version}
 Sessions: ✅ Persistantes
-Support: ${config.bot.support_contact}
+Support: \\\${config.bot.support_contact}
 
 *Fonctionnalités:*
 • Sessions WhatsApp permanentes
 • Mode silencieux
 • Contrôle d'accès
 • Commandes audio avancées
-• Support 24/7`;
-                await this.sendMessageWithMode(sender, session, infoText, userSettings);
-                break;
-                
-            case 'ping':
-                const start = Date.now();
-                await this.sendMessageWithMode(sender, session, "🏓 *Pong!*", userSettings);
-                const latency = Date.now() - start;
-                await this.sendMessageWithMode(sender, session, `🏓 *Pong!*\nLatence: ${latency}ms`, userSettings);
-                break;
-                
-            case 'time':
-                const now = new Date();
-                const timeText = `🕐 *Heure actuelle*
+• Support 24/7\\\`;
 
-Date: ${now.toLocaleDateString('fr-FR')}
-Heure: ${now.toLocaleTimeString('fr-FR')}
-Fuseau: UTC+1 (Afrique/Douala)`;
-                await this.sendMessageWithMode(sender, session, timeText, userSettings);
-                break;
-                
-            default:
-                if (!userSettings.silent_mode) {
-                    await session.socket.sendMessage(sender, {
-                        text: "❌ *Commande inconnue*\n\nUtilisez `!help` pour voir les commandes disponibles."
-                    });
-                }
-                break;
+            await sock.sendMessage(remoteJid, { text: infoText });
+            log.info(\\\`✅ Info command executed for \\\${remoteJid}\\\`);
+            
+        } catch (error) {
+            log.error(\\\`❌ Erreur commande info: \\\${error.message}\\\`);
         }
     }
+};
+            `
+        };
 
-    async sendMessageWithMode(sender, session, text, userSettings) {
-        try {
-            if (userSettings.silent_mode) {
-                await session.socket.sendMessage(sender, { text: text });
-            } else {
-                await session.socket.sendMessage(sender, { text: text });
+        for (const [filename, content] of Object.entries(defaultCommands)) {
+            const filePath = path.join(commandsPath, filename);
+            if (!fs.existsSync(filePath)) {
+                fs.writeFileSync(filePath, content.trim());
+                log.success(\\\`✅ Commande créée: \\\${filename}\\\`);
             }
-        } catch (error) {
-            log.error('❌ Erreur envoi message WhatsApp:', error);
         }
     }
 
@@ -633,7 +769,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
 
     async sendQRCode(userId, qrCode, sessionId) {
         try {
-            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-qr`, {
+            const response = await fetch(\\\`\\\${this.nodeApiUrl}/api/bot/send-qr\\\`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -646,22 +782,22 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             const result = await response.json();
             
             if (result.success) {
-                log.success(`✅ QR code envoyé à ${userId} via pont HTTP`);
+                log.success(\\\`✅ QR code envoyé à \\\${userId} via pont HTTP\\\`);
                 return true;
             } else {
-                log.error(`❌ Échec envoi QR à ${userId}:`, result.error);
+                log.error(\\\`❌ Échec envoi QR à \\\${userId}:\\\`, result.error);
                 return false;
             }
             
         } catch (error) {
-            log.error(`❌ Erreur envoi QR à ${userId} via HTTP:`, error.message);
+            log.error(\\\`❌ Erreur envoi QR à \\\${userId} via HTTP: \\\${error.message}\\\`);
             return false;
         }
     }
 
     async sendPairingCode(userId, pairingCode, phoneNumber) {
         try {
-            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-pairing`, {
+            const response = await fetch(\\\`\\\${this.nodeApiUrl}/api/bot/send-pairing\\\`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -674,22 +810,22 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             const result = await response.json();
             
             if (result.success) {
-                log.success(`✅ Code pairing envoyé à ${userId} via pont HTTP`);
+                log.success(\\\`✅ Code pairing envoyé à \\\${userId} via pont HTTP\\\`);
                 return true;
             } else {
-                log.error(`❌ Échec envoi pairing à ${userId}:`, result.error);
+                log.error(\\\`❌ Échec envoi pairing à \\\${userId}:\\\`, result.error);
                 return false;
             }
             
         } catch (error) {
-            log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message);
+            log.error(\\\`❌ Erreur envoi pairing à \\\${userId} via HTTP: \\\${error.message}\\\`);
             return false;
         }
     }
 
     async sendMessage(userId, message) {
         try {
-            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-message`, {
+            const response = await fetch(\\\`\\\${this.nodeApiUrl}/api/bot/send-message\\\`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -701,15 +837,15 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             const result = await response.json();
             
             if (result.success) {
-                log.success(`✅ Message envoyé à ${userId} via pont HTTP`);
+                log.success(\\\`✅ Message envoyé à \\\${userId} via pont HTTP\\\`);
                 return true;
             } else {
-                log.error(`❌ Échec envoi message à ${userId}:`, result.error);
+                log.error(\\\`❌ Échec envoi message à \\\${userId}:\\\`, result.error);
                 return false;
             }
             
         } catch (error) {
-            log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message);
+            log.error(\\\`❌ Erreur envoi message à \\\${userId} via HTTP: \\\${error.message}\\\`);
             return false;
         }
     }
@@ -774,7 +910,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             };
 
             if (reason?.output?.statusCode === 401 && session?.subscriptionActive) {
-                log.warn(`🔌 Session expirée pour utilisateur payant: ${sessionId}`);
+                log.warn(\\\`🔌 Session expirée pour utilisateur payant: \\\${sessionId}\\\`);
                 disconnectData.disconnect_reason = 'Session expired - Will attempt reconnect';
                 
                 setTimeout(() => {
@@ -785,7 +921,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             await this.updateSessionStatus(sessionId, 'disconnected', disconnectData);
             
             if (session) {
-                let message = '❌ *Déconnexion WhatsApp*\n\n';
+                let message = '❌ *Déconnexion WhatsApp*\\n\\n';
                 
                 if (reason?.output?.statusCode === 401) {
                     if (session.subscriptionActive) {
@@ -805,7 +941,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                 try {
                     await this.sendMessage(session.userId, message);
                 } catch (error) {
-                    log.error(`❌ Erreur envoi message déconnexion à ${session.userId}:`, error);
+                    log.error(\\\`❌ Erreur envoi message déconnexion à \\\${session.userId}:\\\`, error);
                 }
             }
 
@@ -813,7 +949,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                 this.sessions.delete(sessionId);
             }
 
-            log.info(`🔌 Session déconnectée: ${sessionId} - ${disconnectData.disconnect_reason}`);
+            log.info(\\\`🔌 Session déconnectée: \\\${sessionId} - \\\${disconnectData.disconnect_reason}\\\`);
 
         } catch (error) {
             log.error('❌ Erreur gestion déconnexion:', error);
@@ -822,7 +958,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
 
     async attemptReconnect(sessionId, session) {
         try {
-            log.info(`🔄 Tentative de reconnexion pour ${sessionId}`);
+            log.info(\\\`🔄 Tentative de reconnexion pour \\\${sessionId}\\\`);
             
             try {
                 await this.sendMessage(
@@ -830,21 +966,21 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                     "🔄 *Reconnexion automatique en cours...*"
                 );
             } catch (error) {
-                log.error(`❌ Erreur envoi message reconnexion à ${session.userId}:`, error);
+                log.error(\\\`❌ Erreur envoi message reconnexion à \\\${session.userId}:\\\`, error);
             }
 
             await this.createSession(session.userId, session.userData, session.connectionMethod);
             
         } catch (error) {
-            log.error(`❌ Échec reconnexion ${sessionId}:`, error);
+            log.error(\\\`❌ Échec reconnexion \\\${sessionId}:\\\`, error);
             
             try {
                 await this.sendMessage(
                     session.userId,
-                    "❌ *Échec reconnexion automatique*\n\nUtilisez /connect pour vous reconnecter manuellement."
+                    "❌ *Échec reconnexion automatique*\\n\\nUtilisez /connect pour vous reconnecter manuellement."
                 );
             } catch (error) {
-                log.error(`❌ Erreur envoi message échec reconnexion à ${session.userId}:`, error);
+                log.error(\\\`❌ Erreur envoi message échec reconnexion à \\\${session.userId}:\\\`, error);
             }
         }
     }
@@ -864,7 +1000,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             
             this.sessions.delete(sessionId);
             
-            log.info(`🔌 Session déconnectée manuellement: ${sessionId}`);
+            log.info(\\\`🔌 Session déconnectée manuellement: \\\${sessionId}\\\`);
         } catch (error) {
             log.error('❌ Erreur déconnexion session:', error);
         }
@@ -1032,7 +1168,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                 const minutesInactive = (now - lastActivity) / (1000 * 60);
                 
                 if (session.is_trial && minutesInactive > 30) {
-                    log.info(`🧹 Nettoyage session essai inactive: ${session.session_id}`);
+                    log.info(\\\`🧹 Nettoyage session essai inactive: \\\${session.session_id}\\\`);
                     await this.disconnectSession(session.session_id);
                 }
                 
@@ -1061,7 +1197,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                 .select();
 
             if (data && data.length > 0) {
-                log.info(`🧹 ${data.length} sessions essai expirées nettoyées`);
+                log.info(\\\`🧹 \\\${data.length} sessions essai expirées nettoyées\\\`);
                 
                 for (const session of data) {
                     await this.disconnectSession(session.session_id);
@@ -1095,7 +1231,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                     .in('user_id', userIds)
                     .eq('status', 'connected');
 
-                log.info(`✅ ${userIds.length} sessions payantes maintenues actives`);
+                log.info(\\\`✅ \\\${userIds.length} sessions payantes maintenues actives\\\`);
             }
 
             const { data: expiredSubs, error: error2 } = await this.supabase
@@ -1118,7 +1254,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
                     .eq('status', 'connected')
                     .eq('subscription_active', true);
 
-                log.warn(`⚠️  ${expiredUserIds.length} sessions marquées comme abonnement expiré`);
+                log.warn(\\\`⚠️  \\\${expiredUserIds.length} sessions marquées comme abonnement expiré\\\`);
             }
 
         } catch (error) {
@@ -1142,7 +1278,7 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             }
         }
         
-        log.info(`💾 ${preservedSessions.length} sessions préservées pour mise à jour`);
+        log.info(\\\`💾 \\\${preservedSessions.length} sessions préservées pour mise à jour\\\`);
         return preservedSessions;
     }
 

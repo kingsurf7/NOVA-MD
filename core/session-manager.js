@@ -193,14 +193,14 @@ class SessionManager {
             const sock = makeWASocket({
                 auth: state,
                 logger: P({ level: "silent" }),
-                browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
+                browser: Browsers.ubuntu('Chrome'),
                 printQRInTerminal: false,
                 syncFullHistory: false,
                 markOnlineOnConnect: true,
                 generateHighQualityLinkPreview: true,
                 emitOwnEvents: true,
                 defaultQueryTimeoutMs: 120000, // Augmenté à 2 minutes
-                connectTimeoutMs: 120000, // Augmenté à 2 minutes
+                connectTimeoutMs: 300000, // Augmenté à 5 minutes
                 keepAliveIntervalMs: 30000, // Ping toutes les 30 secondes
                 maxRetries: 5, // Plus de tentatives
                 retryDelayMs: 5000, // Délai entre les tentatives
@@ -282,7 +282,7 @@ class SessionManager {
                     if (session && session.status === 'qr_generated') {
                         log.warn(`⏰ QR Timeout pour ${userId}`);
                         await this.sendMessage(userId, 
-                            "⏰ *QR Code expiré*\n\n" +
+                            "⏰ **QR Code expiré**\n\n" +
                             "Le QR code a expiré après 5 minutes.\n\n" +
                             "Veuillez:\n" +
                             "• Redémarrer la connexion avec /connect\n" +
@@ -318,7 +318,7 @@ class SessionManager {
                     if (session && session.status !== 'connected') {
                         log.warn(`⏰ Connexion timeout pour ${userId}`);
                         await this.sendMessage(userId,
-                            "⏰ *Timeout de connexion*\n\n" +
+                            "⏰ **Timeout de connexion**\n\n" +
                             "La connexion a pris trop de temps.\n\n" +
                             "Causes possibles:\n" +
                             "• Problème réseau\n" +

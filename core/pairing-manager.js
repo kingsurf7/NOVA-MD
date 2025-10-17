@@ -43,7 +43,7 @@ class PairingManager {
 
       // Si numéro fourni, l'utiliser directement
       if (phoneNumber) {
-        log.info(`📱 Utilisation du numéro fourni pour ${user_id} `);
+        log.info(`📱 Utilisation du numéro fourni pour ${userId} `);
         return await this.startPairingWithPhone(userId, userData, phoneNumber);
       } else {
         return await this.startPairingProcess(userId, userData);

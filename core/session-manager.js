@@ -570,8 +570,7 @@ class SessionManager {
         const commandsPath = path.join(__dirname, '../commands');
         
         const defaultCommands = {
-            'help.js': `
-const log = require('../utils/logger')(module);
+            'help.js': `const log = require('../utils/logger')(module);
 
 module.exports = {
     name: 'help',
@@ -608,10 +607,8 @@ module.exports = {
             log.error(\\\`❌ Erreur commande help: \\\${error.message}\\\`);
         }
     }
-};
-            `,
-            'ping.js': `
-const log = require('../utils/logger')(module);
+};`,
+            'ping.js': `const log = require('../utils/logger')(module);
 
 module.exports = {
     name: 'ping',
@@ -637,10 +634,8 @@ module.exports = {
             log.error(\\\`❌ Erreur commande ping: \\\${error.message}\\\`);
         }
     }
-};
-            `,
-            'status.js': `
-const log = require('../utils/logger')(module);
+};`,
+            'status.js': `const log = require('../utils/logger')(module);
 
 module.exports = {
     name: 'status',
@@ -675,10 +670,8 @@ module.exports = {
             log.error(\\\`❌ Erreur commande status: \\\${error.message}\\\`);
         }
     }
-};
-            `,
-            'silent.js': `
-const log = require('../utils/logger')(module);
+};`,
+            'silent.js': `const log = require('../utils/logger')(module);
 
 module.exports = {
     name: 'silent',
@@ -714,10 +707,8 @@ module.exports = {
             log.error(\\\`❌ Erreur commande silent: \\\${error.message}\\\`);
         }
     }
-};
-            `,
-            'info.js': `
-const log = require('../utils/logger')(module);
+};`,
+            'info.js': `const log = require('../utils/logger')(module);
 const config = require('../config');
 
 module.exports = {
@@ -750,8 +741,7 @@ Support: \\\${config.bot.support_contact}
             log.error(\\\`❌ Erreur commande info: \\\${error.message}\\\`);
         }
     }
-};
-            `
+};`
         };
 
         for (const [filename, content] of Object.entries(defaultCommands)) {

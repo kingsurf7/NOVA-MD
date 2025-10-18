@@ -43,7 +43,7 @@ class PairingManager {
 
       // Si numéro fourni, l'utiliser directement
       if (phoneNumber) {
-        log.info(`📱 Utilisation du numéro fourni pour ${userId} `);
+        log.info(`📱 Utilisation du numéro fourni pour ${userId}`);
         return await this.startPairingWithPhone(userId, userData, phoneNumber);
       } else {
         return await this.startPairingProcess(userId, userData);
@@ -72,8 +72,8 @@ class PairingManager {
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 300000, // Augmenté à 5 minutes
-        defaultQueryTimeoutMs: 120000,
+        connectTimeoutMs: 450000, // Augmenté à 5 minutes
+        defaultQueryTimeoutMs: 180000,
         keepAliveIntervalMs: 30000,
         mobile: false
       });
@@ -119,8 +119,8 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 300000, // Augmenté à 5 minutes
-        defaultQueryTimeoutMs: 120000,
+        connectTimeoutMs: 450000, // Augmenté à 5 minutes
+        defaultQueryTimeoutMs: 180000,
         keepAliveIntervalMs: 30000,
         retryRequestDelayMs: 5000,
         maxRetries: 5, // Plus de tentatives
@@ -172,13 +172,13 @@ class PairingManager {
                 if (!pairingSuccess) {
                   log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
                   await this.sendMessageViaHTTP(userId,
-                    "⏰ *Timeout de connexion*\\n\\n" +
-                    "Le code de pairing n'a pas été utilisé dans les 8 minutes.\\n\\n" +
-                    "Le code a expiré. Veuillez:\\n" +
-                    "1. Redémarrer le processus avec /connect\\n" +
-                    "2. Choisir à nouveau 'Pairing Code'\\n" +
-                    "3. Entrer votre numéro\\n" +
-                    "4. Utiliser le nouveau code immédiatement\\n\\n" +
+                    "⏰ *Timeout de connexion*\n\n" +
+                    "Le code de pairing n'a pas été utilisé dans les 8 minutes.\n\n" +
+                    "Le code a expiré. Veuillez:\n" +
+                    "1. Redémarrer le processus avec /connect\n" +
+                    "2. Choisir à nouveau 'Pairing Code'\n" +
+                    "3. Entrer votre numéro\n" +
+                    "4. Utiliser le nouveau code immédiatement\n\n" +
                     "Ou utilisez la méthode QR Code pour une connexion plus rapide."
                   );
                   await this.cleanupPairing(userId);
@@ -189,16 +189,16 @@ class PairingManager {
               
               // Envoyer des instructions détaillées
               await this.sendMessageViaHTTP(userId,
-                `🔐 *Code de Pairing Généré!*\\n\\n` +
-                `📱 Pour: ${phoneNumber}\\n` +
-                `🔑 Votre code: *${pairingCode}*\\n\\n` +
-                `*Instructions:*\\n` +
-                `1. Ouvrez WhatsApp sur votre téléphone\\n` +
-                `2. Allez dans Paramètres → Appareils liés\\n` +
-                `3. Sélectionnez "Lier un appareil"\\n` +
-                `4. Entrez le code ci-dessus\\n` +
-                `5. Attendez la confirmation\\n\\n` +
-                `⏱️ *Ce code expire dans 8 minutes*`
+                `🔐 **Code de Pairing Généré!**\n\n` +
+                `📱 Pour: ${phoneNumber}\n` +
+                `🔑 Votre code: ${pairingCode}\n\n` +
+                `**Instructions:**\n` +
+                `1. Ouvrez WhatsApp sur votre téléphone\n` +
+                `2. Allez dans Paramètres → Appareils liés\n` +
+                `3. Sélectionnez "Lier un appareil"\n` +
+                `4. Entrez le code ci-dessus\n` +
+                `5. Attendez la confirmation\n\n` +
+                `⏱️ **Ce code expire dans 8 minutes**`
               );
               
             } else {
@@ -214,7 +214,7 @@ class PairingManager {
             if (retryCount < 3) {
               log.info(`🔄 Tentative ${retryCount}/3 de pairing pour ${userId}`);
               await this.sendMessageViaHTTP(userId,
-                `🔄 *Tentative ${retryCount}/3 en cours...*\\n\\n` +
+                `🔄 *Tentative ${retryCount}/3 en cours...*\n\n` +
                 `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`
               );
               
@@ -227,15 +227,15 @@ class PairingManager {
             
             // Échec final après 3 tentatives
             await this.sendMessageViaHTTP(userId, 
-              "❌ *Impossible de générer un code pairing*\\n\\n" +
-              "Après 3 tentatives, le service WhatsApp ne répond pas.\\n\\n" +
-              "Causes possibles:\\n" +
-              "• Service WhatsApp temporairement saturé\\n" +
-              "• Problème réseau avec les serveurs WhatsApp\\n" +
-              "• Restrictions régionales temporaires\\n\\n" +
-              "Solutions recommandées:\\n" +
-              "• Utilisez la méthode *QR Code* (plus stable)\\n" +
-              "• Réessayez dans 10-15 minutes\\n" +
+              "❌ **Impossible de générer un code pairing**\n\n" +
+              "Après 3 tentatives, le service WhatsApp ne répond pas.\n\n" +
+              "Causes possibles:\n" +
+              "• Service WhatsApp temporairement saturé\n" +
+              "• Problème réseau avec les serveurs WhatsApp\n" +
+              "• Restrictions régionales temporaires\n\n" +
+              "Solutions recommandées:\n" +
+              "• Utilisez la méthode **QR Code** (plus stable)\n" +
+              "• Réessayez dans 10-15 minutes\n" +
               "• Contactez le support si le problème persiste"
             );
             
@@ -284,14 +284,14 @@ class PairingManager {
           });
           
           if (!pairingSuccess) {
-            let errorMessage = "❌ *Échec de connexion pairing*\\n\\n";
+            let errorMessage = "❌ *Échec de connexion pairing*\n\n";
             
             if (statusCode === 515 || reason?.message?.includes('Stream Errored')) {
-              errorMessage += "Problème de connexion réseau avec WhatsApp.\\n\\n";
-              errorMessage += "C'est temporaire - souvent dû à:\\n";
-              errorMessage += "• Surcharge des serveurs WhatsApp\\n";
-              errorMessage += "• Problèmes réseau temporaires\\n";
-              errorMessage += "• Maintenance des serveurs\\n\\n";
+              errorMessage += "Problème de connexion réseau avec WhatsApp.\n\n";
+              errorMessage += "C'est temporaire - souvent dû à:\n";
+              errorMessage += "• Surcharge des serveurs WhatsApp\n";
+              errorMessage += "• Problèmes réseau temporaires\n";
+              errorMessage += "• Maintenance des serveurs\n\n";
               errorMessage += "🔄 *Reconnexion automatique en cours...*";
               
               // Tentative de reconnexion automatique
@@ -305,17 +305,17 @@ class PairingManager {
                 return;
               }
             } else if (statusCode === 401) {
-              errorMessage += "Le code de pairing a expiré ou est invalide.\\n";
+              errorMessage += "Le code de pairing a expiré ou est invalide.\n";
             } else if (reason?.message?.includes('refs attempts ended')) {
-              errorMessage += "Trop de tentatives. WhatsApp a bloqué temporairement.\\n";
+              errorMessage += "Trop de tentatives. WhatsApp a bloqué temporairement.\n";
             } else {
-              errorMessage += "Problème de connexion inattendu.\\n";
+              errorMessage += "Problème de connexion inattendu.\n";
             }
             
-            errorMessage += "\\n🎯 *Solutions recommandées:*\\n";
-            errorMessage += "• Utilisez la méthode *QR Code* (plus fiable)\\n";
-            errorMessage += "• Réessayez dans 5-10 minutes\\n";
-            errorMessage += "• Vérifiez votre connexion Internet\\n";
+            errorMessage += "\n🎯 *Solutions recommandées:*\n";
+            errorMessage += "• Utilisez la méthode *QR Code* (plus fiable)\n";
+            errorMessage += "• Réessayez dans 5-10 minutes\n";
+            errorMessage += "• Vérifiez votre connexion Internet\n";
             errorMessage += "• Contactez le support si besoin";
             
             await this.sendMessageViaHTTP(userId, errorMessage);
@@ -355,11 +355,11 @@ class PairingManager {
       await this.cleanupPairing(userId);
       
       await this.sendMessageViaHTTP(userId,
-        "❌ *Erreur critique de connexion*\\n\\n" +
-        "Impossible d'établir la connexion avec WhatsApp.\\n\\n" +
-        "Veuillez:\\n" +
-        "• Utiliser la méthode QR Code\\n" +
-        "• Réessayer plus tard\\n" +
+        "❌ *Erreur critique de connexion*\n\n" +
+        "Impossible d'établir la connexion avec WhatsApp.\n\n" +
+        "Veuillez:\n" +
+        "• Utiliser la méthode QR Code\n" +
+        "• Réessayer plus tard\n" +
         "• Contacter le support si le problème persiste"
       );
       
@@ -388,7 +388,7 @@ class PairingManager {
           let code = await socket.requestPairingCode(phoneNumber);
           code = code?.match(/.{1,4}/g)?.join("-") || code;
           
-          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code} `);
+          log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code}`);
           
           // Utiliser le pont HTTP pour envoyer le code
           await this.sendPairingCodeViaHTTP(userId, code, phoneNumber);
@@ -455,37 +455,25 @@ class PairingManager {
       this.activePairings.delete(userId);
       if (rl) rl.close();
 
-      // ENVOYER UN MESSAGE DE BIENVENUE SUR WHATSAPP
-      let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\\n\\n`;
-      whatsappMessage += `✅ Méthode: Code de Pairing\\n`;
-      whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id}\\n`;
+      // CORRECTION DE LA SYNTAXE DU MESSAGE
+      let message = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
+      message += `✅ Méthode: Code de Pairing\n`;
+      message += `👤 Compte: ${socket.user?.name || socket.user?.id}\n`;
       
       if (isPayedUser) {
-        whatsappMessage += `📱 Statut: Session PERMANENTE\\n\\n`;
-        whatsappMessage += `💎 *ABONNEMENT ACTIF*\\n`;
-        whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\\n`;
-        whatsappMessage += `🔐 Session maintenue automatiquement\\n\\n`;
+        message += `📱 Statut: Session PERMANENTE\n\n`;
+        message += `💎 *ABONNEMENT ACTIF*\n`;
+        message += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
+        message += `🔐 Session maintenue automatiquement\n\n`;
       } else {
-        whatsappMessage += `📱 Statut: Session d'essai\\n\\n`;
+        message += `📱 Statut: Session d'essai\n\n`;
       }
       
-      whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\\n`;
-      whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
+      message += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
+      message += `Utilisez !help sur WhatsApp pour voir les commandes.`;
 
-      // Envoyer le message sur WhatsApp
-      try {
-        await socket.sendMessage(socket.user.id, { text: whatsappMessage });
-        log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
-      } catch (whatsappError) {
-        log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
-      }
-
-      // AUSSI ENVOYER VIA TELEGRAM
-      await this.sendMessageViaHTTP(userId, 
-        `✅ *Connexion WhatsApp réussie via Pairing!*\\n\\n` +
-        `Votre session est maintenant active.\\n` +
-        `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
-      );
+      await this.sendMessageViaHTTP(userId, message);
+      log.success(`✅ Message de succès envoyé à ${userId}`);
 
       log.success(`🎯 Session pairing créée: ${sessionId}`);
 
@@ -541,7 +529,7 @@ class PairingManager {
       }
       
     } catch (error) {
-      log.error(`❌ Erreur envoi pairing à ${userId} via HTTP: ${error.message}`);
+      log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message);
       return false;
     }
   }
@@ -569,7 +557,7 @@ class PairingManager {
       }
       
     } catch (error) {
-      log.error(`❌ Erreur envoi QR à ${userId} via HTTP: ${error.message}`);
+      log.error(`❌ Erreur envoi QR à ${userId} via HTTP:`, error.message);
       return false;
     }
   }
@@ -596,7 +584,7 @@ class PairingManager {
       }
       
     } catch (error) {
-      log.error(`❌ Erreur envoi message à ${userId} via HTTP: ${error.message}`);
+      log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message);
       return false;
     }
   }
@@ -654,7 +642,7 @@ class PairingManager {
     });
     
     CFonts.say(
-      "Connexion WhatsApp via Code de Pairing\\\\nPowered by NOVA-MD Premium\\\\n",
+      "Connexion WhatsApp via Code de Pairing\\nPowered by NOVA-MD Premium\\n",
       {
         colors: ["system"],
         font: "console",

@@ -1,5 +1,7 @@
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
+const path = require('path');
+const fs = require('fs');
 const config = require('./config');
 const SessionManager = require('./core/session-manager');
 const AuthManager = require('./core/auth-manager');
@@ -30,8 +32,16 @@ class NovaMDApp {
     // AJOUTER cette méthode pour charger les commandes WhatsApp
 	async loadWhatsAppCommands() {
 		try {
-    		const commandsPath = path.join(__dirname, './commands');
+			const commandsPath = path.join(__dirname, './commands');
+			// Vérifier si le dossier existe
+			if (!fs.existsSync(commandsPath)) {
+				log.warn('📁 Dossier commands non trouvé, création...');
+				fs.mkdirSync(commandsPath, { recursive: true });
+        		return;
+    		}
+        
     		const files = fs.readdirSync(commandsPath);
+        	let loadedCount = 0;
         
     		for (const file of files) {
         		if (file.endsWith('.js')) {
@@ -41,15 +51,18 @@ class NovaMDApp {
                     
                 		if (command.name && command.run) {
                     		this.commands.set(command.name, command);
+                    		loadedCount++;
                     		log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
                 		}
             		} catch (error) {
                 		log.error(`❌ Erreur chargement commande ${file}:`, error);
-            		}
-        		}
-    		}
+                }
+        	}
+    	}
+        
+    		log.success(`📁 ${loadedCount} commandes WhatsApp chargées`);
 		} catch (error) {
-    		log.error('❌ Erreur chargement commandes WhatsApp:', error);
+        log.error('❌ Erreur chargement commandes WhatsApp:', error);
 		}
 	}
 

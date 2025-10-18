@@ -72,10 +72,10 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 120000, // 60 secondes
-        defaultQueryTimeoutMs: 120000,
+        connectTimeoutMs: 360000, // 60 secondes
+        defaultQueryTimeoutMs: 360000,
         keepAliveIntervalMs: 30000,
-        retryRequestDelayMs: 250,
+        retryRequestDelayMs: 1000,
         maxRetries: 10,
         emitOwnEvents: true,
         generateHighQualityLinkPreview: false,
@@ -136,7 +136,7 @@ class PairingManager {
                   log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
                   await this.sendMessageViaHTTP(userId,
                     "⏰ *Timeout de connexion*\n\n" +
-                    "Le code de pairing n'a pas été utilisé dans les 5 minutes.\n\n" +
+                    "Le code de pairing n'a pas été utilisé dans les 8 minutes.\n\n" +
                     "Veuillez redémarrer le processus avec /connect"
                   );
                   await this.cleanupPairing(userId);
@@ -240,7 +240,7 @@ class PairingManager {
             
             errorMessage += "🎯 *Solutions recommandées:*\n";
             errorMessage += "• Utilisez la méthode *QR Code* (plus fiable)\n";
-            errorMessage += "• Réessayez dans 1-2 heures\n";
+            errorMessage += "• Réessayez dans 10 minutes\n";
             errorMessage += "• Utilisez un environnement local si possible";
             
             await this.sendMessageViaHTTP(userId, errorMessage);

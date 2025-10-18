@@ -177,32 +177,43 @@ class SessionManager {
     }
 
     async createQRSession(userId, userData, isPayedUser = false) {
-        try {
-            await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
+		try {
+    		await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
 
-            const sessionId = `qr_${userId}_${Date.now()}`;
-            const authDir = `./sessions/${sessionId}`;
+    		const sessionId = `qr_${userId}_${Date.now()}`;
+    		const authDir = `./sessions/${sessionId}`;
 
-            const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    		const { state, saveCreds } = await useMultiFileAuthState(authDir);
+        
+        // CONFIGURATION ULTRA-COMPATIBLE Koyeb
+    		const sock = makeWASocket({
+            auth: state,
+            logger: pino({ level: "error" }), // Seulement les erreurs
+            browser: ['Ubuntu', 'Chrome', '20.0.0.0'], // Version ancienne plus compatible
+            printQRInTerminal: false,
+            syncFullHistory: false,
+            markOnlineOnConnect: false, // IMPORTANT: false pour serveurs
+            generateHighQualityLinkPreview: false,
+            emitOwnEvents: false,
+            defaultQueryTimeoutMs: 30000,
+            connectTimeoutMs: 60000,
+            keepAliveIntervalMs: 25000,
+            maxRetries: 3,
+            retryDelayMs: 1000,
+            fireInitQueries: false, // IMPORTANT: false pour éviter les timeouts
+            mobile: false,
+            appStateMacVerification: {
+                patch: false,
+                snapshot: false
+            },
+            getMessage: async () => undefined,
+            // Configuration réseau spécifique
+            patchMessageBeforeSending: (message) => {
+                // Simplifier les messages pour plus de compatibilité
+                return message;
+            }
+    	 });
             
-            // CONFIGURATION AMÉLIORÉE - Timeouts augmentés
-            const sock = makeWASocket({
-                auth: state,
-                logger: P({ level: "silent" }),
-                browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
-                printQRInTerminal: false,
-                syncFullHistory: false,
-                markOnlineOnConnect: true,
-                generateHighQualityLinkPreview: true,
-                emitOwnEvents: true,
-                defaultQueryTimeoutMs: 180000, // Augmenté à 2 minutes
-                connectTimeoutMs: 450000, // Augmenté à 2 minutes
-                keepAliveIntervalMs: 30000, // Ping toutes les 30 secondes
-                maxRetries: 5, // Plus de tentatives
-                retryDelayMs: 5000, // Délai entre les tentatives
-                fireInitQueries: true,
-                mobile: false
-            });
 
             this.sessions.set(sessionId, {
                 socket: sock,

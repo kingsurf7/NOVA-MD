@@ -5,14 +5,6 @@ const CFonts = require("cfonts");
 const fs = require("fs-extra");
 const chalk = require("chalk");
 const readline = require("readline");
-const fetchGlobal = globalThis.fetch;
-let fetch = fetchGlobal;
-try {
-  // fallback for Node < 18 if node-fetch is installed
-  if (!fetch) fetch = require("node-fetch");
-} catch (e) {
-  // no fallback — assume environment provides fetch
-}
 
 const {
   default: makeWASocket,
@@ -20,7 +12,6 @@ const {
   delay,
   PHONENUMBER_MCC,
   Browsers,
-  fetchLatestBaileysVersion,
 } = require("@whiskeysockets/baileys");
 
 const { createClient } = require("@supabase/supabase-js");
@@ -80,26 +71,30 @@ class PairingManager {
 
       // CONFIGURATION OPTIMISÉE POUR PAIRING
       const socket = makeWASocket({
-        version,
-        logger: pino({ level: "fatal" }),
-        browser: Browsers.ubuntu("Chrome"),
+        logger: pino({ level: "silent" }),
+        browser: Browsers.ubuntu('Chrome'),
         auth: state,
-        printQRInTerminal: false,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 45000,
-        keepAliveIntervalMs: 25000,
-        maxRetries: 3,
-        mobile: false,
-        fireInitQueries: true,
-        emitOwnEvents: true,
+        printQRInTerminal: false,
+        connectTimeoutMs: 570000, // Augmenté à 5 minutes
+        defaultQueryTimeoutMs: 120000,
+        keepAliveIntervalMs: 60000,
+        retryRequestDelayMs: 5000,
+        maxRetries: 4, // Plus de tentatives
+        emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
+        fireInitQueries: false,
+        mobile: false,
         appStateMacVerification: {
           patch: false,
-          snapshot: false,
+          snapshot: false
         },
-        getMessage: async () => undefined,
+        transactionOpts: {
+          maxCommitRetries: 3,
+          delayBeforeRetry: 2000
+        },
+        getMessage: async () => undefined
       });
 
       let pairingCodeSent = false;
@@ -144,7 +139,7 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 300000); // 5 minutes
+              }, 600000); // 8 minutes
 
               log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
             } else {
@@ -160,16 +155,15 @@ class PairingManager {
               log.info(`🔄 Tentative ${retryCount}/3 de pairing pour ${userId}`);
               await this.sendMessageViaHTTP(
                 userId,
-                `🔄 *Tentative ${retryCount}/3 en cours...*\n\n` + `Nouvelle tentative automatique...`
+                `🔄 *Tentative de reconnexion ${retryCount}/3 en cours...*\n\n` + `Nouvelle tentative automatique...`
               );
 
-              // Réessayer après délai progressif
-              const retryDelay = retryCount * 3000; // 3s, 6s, 9s
+              //réessayer 
               setTimeout(() => {
                 this.startPairingWithPhone(userId, userData, phoneNumber).catch((e) =>
                   log.error("retry error:", e)
                 );
-              }, retryDelay);
+              }, 4000);
               return;
             }
 
@@ -187,7 +181,7 @@ class PairingManager {
             await this.cleanupPairing(userId);
           }
         }
-      }, 2000); // Réduit à 2 secondes
+      }, 4000); // Réduit à 4 secondes
 
       // Gestion des événements de connexion
       socket.ev.on("connection.update", async (update) => {
@@ -298,7 +292,7 @@ class PairingManager {
 
       const socket = makeWASocket({
         version,
-        logger: pino({ level: "fatal" }),
+        logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu("Chrome"),
         auth: state,
         printQRInTerminal: false,

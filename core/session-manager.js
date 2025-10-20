@@ -1,11 +1,13 @@
 const { createClient } = require('@supabase/supabase-js');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay, Browsers, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const P = require("pino");
 const config = require('../config');
 const AuthManager = require('./auth-manager');
 const PairingManager = require('./pairing-manager');
 const TrialManager = require('./trial-manager');
 const log = require('../utils/logger')(module);
+const fs = require('fs-extra');
+const path = require('path');
 
 class SessionManager {
     constructor() {
@@ -177,43 +179,39 @@ class SessionManager {
     }
 
     async createQRSession(userId, userData, isPayedUser = false) {
-		try {
-    		await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
+        try {
+            await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
 
-    		const sessionId = `qr_${userId}_${Date.now()}`;
-    		const authDir = `./sessions/${sessionId}`;
+            const sessionId = `qr_${userId}_${Date.now()}`;
+            const authDir = `./sessions/${sessionId}`;
 
-    		const { state, saveCreds } = await useMultiFileAuthState(authDir);
-        
-        // CONFIGURATION ULTRA-COMPATIBLE Koyeb
-    		const sock = makeWASocket({
-            auth: state,
-            logger: pino({ level: "error" }), // Seulement les erreurs
-            browser: ['Ubuntu', 'Chrome', '20.0.0.0'], // Version ancienne plus compatible
-            printQRInTerminal: false,
-            syncFullHistory: false,
-            markOnlineOnConnect: false, // IMPORTANT: false pour serveurs
-            generateHighQualityLinkPreview: false,
-            emitOwnEvents: false,
-            defaultQueryTimeoutMs: 30000,
-            connectTimeoutMs: 60000,
-            keepAliveIntervalMs: 25000,
-            maxRetries: 3,
-            retryDelayMs: 1000,
-            fireInitQueries: false, // IMPORTANT: false pour éviter les timeouts
-            mobile: false,
-            appStateMacVerification: {
-                patch: false,
-                snapshot: false
-            },
-            getMessage: async () => undefined,
-            // Configuration réseau spécifique
-            patchMessageBeforeSending: (message) => {
-                // Simplifier les messages pour plus de compatibilité
-                return message;
-            }
-    	 });
+            // Créer le dossier de session
+            await fs.ensureDir(authDir);
+
+            const { state, saveCreds } = await useMultiFileAuthState(authDir);
             
+            // CONFIGURATION ULTRA-STABLE
+            const sock = makeWASocket({
+                auth: state,
+                logger: P({ level: "fatal" }), // Seulement les erreurs critiques
+                browser: Browsers.ubuntu('Chrome'),
+                printQRInTerminal: false,
+                syncFullHistory: false,
+                markOnlineOnConnect: false,
+                generateHighQualityLinkPreview: false,
+                emitOwnEvents: false,
+                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 120000, // 2 minutes
+                keepAliveIntervalMs: 30000,
+                maxRetries: 3,
+                mobile: false,
+                fireInitQueries: true,
+                appStateMacVerification: {
+                    patch: false,
+                    snapshot: false
+                },
+                getMessage: async () => undefined,
+            });
 
             this.sessions.set(sessionId, {
                 socket: sock,
@@ -251,6 +249,18 @@ class SessionManager {
             };
         } catch (error) {
             log.error('❌ Erreur création session QR:', error);
+            
+            // Message d'erreur informatif
+            await this.sendMessage(userId,
+                `❌ *Erreur de création de session*\n\n` +
+                `Impossible de créer la session WhatsApp.\n\n` +
+                `Causes possibles:\n` +
+                `• Problème de connexion internet\n` +
+                `• Serveurs WhatsApp surchargés\n` +
+                `• Limite de sessions atteinte\n\n` +
+                `Veuillez réessayer dans 5 minutes.`
+            );
+            
             throw error;
         }
     }
@@ -283,14 +293,14 @@ class SessionManager {
                     session.qrTimestamp = Date.now();
                 }
 
-                // Timeout QR augmenté à 5 minutes
+                // Timeout QR augmenté à 8 minutes
                 qrTimeout = setTimeout(async () => {
                     const session = this.sessions.get(sessionId);
                     if (session && session.status === 'qr_generated') {
                         log.warn(`⏰ QR Timeout pour ${userId}`);
                         await this.sendMessage(userId, 
                             "⏰ *QR Code expiré*\n\n" +
-                            "Le QR code a expiré après 5 minutes.\n\n" +
+                            "Le QR code a expiré après 8 minutes.\n\n" +
                             "Veuillez:\n" +
                             "• Redémarrer la connexion avec /connect\n" +
                             "• Scanner le nouveau QR code rapidement\n" +
@@ -298,7 +308,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 300000); // 5 minutes
+                }, 480000); // 8 minutes
 
                 // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
                 await this.sendQRCode(userId, qr, sessionId);
@@ -318,7 +328,7 @@ class SessionManager {
                 log.info(`🔄 Nouvelle connexion détectée pour ${userId}`);
             }
 
-            // Timeout de connexion général augmenté à 10 minutes
+            // Timeout de connexion général augmenté à 12 minutes
             if (connection === "connecting" && !qr) {
                 connectionTimeout = setTimeout(async () => {
                     const session = this.sessions.get(sessionId);
@@ -335,7 +345,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 600000); // 10 minutes
+                }, 720000); // 12 minutes
             }
         });
 
@@ -1205,4 +1215,4 @@ Fuseau: UTC+1 (Afrique/Douala)`;
     }
 }
 
-module.exports = SessionManager;
+module.exports = SessionManager; 

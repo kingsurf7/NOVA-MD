@@ -18,6 +18,7 @@ class NovaMDApp {
         this.supabase = createClient(config.supabase.url, config.supabase.key);
         this.sessionManager = new SessionManager();
         this.authManager = new AuthManager();
+		this.commands = new Map();
         this.commandManager = new DynamicCommandManager();
         this.resourceManager = new ResourceManager();
         this.commandHandler = new CommandHandler();

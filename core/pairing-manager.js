@@ -67,7 +67,6 @@ class PairingManager {
       }
 
       const { state, saveCreds } = await useMultiFileAuthState("./" + this.sessionName);
-      const { version } = await fetchLatestBaileysVersion();
 
       // CONFIGURATION OPTIMISÉE POUR PAIRING
       const socket = makeWASocket({

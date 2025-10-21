@@ -1,13 +1,13 @@
 const { createClient } = require('@supabase/supabase-js');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay, Browsers, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const P = require("pino");
-const path = require('path');
-const fs = require('fs-extra');
 const config = require('../config');
 const AuthManager = require('./auth-manager');
 const PairingManager = require('./pairing-manager');
 const TrialManager = require('./trial-manager');
 const log = require('../utils/logger')(module);
+const fs = require('fs-extra');
+const path = require('path');
 
 class SessionManager {
     constructor() {
@@ -19,11 +19,9 @@ class SessionManager {
         this.userSettings = new Map();
         this.telegramBot = null;
         this.nodeApiUrl = process.env.NODE_API_URL || 'http://localhost:3000';
-        this.commands = new Map();
         
         this.loadUserSettings();
         this.setupSessionMaintenance();
-        this.initializeWhatsAppCommands();
     }
 
     setTelegramBot(bot) {
@@ -187,25 +185,32 @@ class SessionManager {
             const sessionId = `qr_${userId}_${Date.now()}`;
             const authDir = `./sessions/${sessionId}`;
 
+            // Créer le dossier de session
+            await fs.ensureDir(authDir);
+
             const { state, saveCreds } = await useMultiFileAuthState(authDir);
             
-            // CONFIGURATION AMÉLIORÉE - Timeouts augmentés
+            // CONFIGURATION ULTRA-STABLE
             const sock = makeWASocket({
                 auth: state,
-                logger: P({ level: "silent" }),
-                browser: ['Ubuntu', 'Chrome', '120.0.0.0'],
+                logger: P({ level: "fatal" }), // Seulement les erreurs critiques
+                browser: Browsers.ubuntu('Chrome'),
                 printQRInTerminal: false,
                 syncFullHistory: false,
-                markOnlineOnConnect: true,
-                generateHighQualityLinkPreview: true,
-                emitOwnEvents: true,
-                defaultQueryTimeoutMs: 120000, // Augmenté à 2 minutes
-                connectTimeoutMs: 120000, // Augmenté à 2 minutes
-                keepAliveIntervalMs: 30000, // Ping toutes les 30 secondes
-                maxRetries: 5, // Plus de tentatives
-                retryDelayMs: 5000, // Délai entre les tentatives
+                markOnlineOnConnect: false,
+                generateHighQualityLinkPreview: false,
+                emitOwnEvents: false,
+                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 120000, // 2 minutes
+                keepAliveIntervalMs: 30000,
+                maxRetries: 3,
+                mobile: false,
                 fireInitQueries: true,
-                mobile: false
+                appStateMacVerification: {
+                    patch: false,
+                    snapshot: false
+                },
+                getMessage: async () => undefined,
             });
 
             this.sessions.set(sessionId, {
@@ -244,6 +249,18 @@ class SessionManager {
             };
         } catch (error) {
             log.error('❌ Erreur création session QR:', error);
+            
+            // Message d'erreur informatif
+            await this.sendMessage(userId,
+                `❌ *Erreur de création de session*\n\n` +
+                `Impossible de créer la session WhatsApp.\n\n` +
+                `Causes possibles:\n` +
+                `• Problème de connexion internet\n` +
+                `• Serveurs WhatsApp surchargés\n` +
+                `• Limite de sessions atteinte\n\n` +
+                `Veuillez réessayer dans 5 minutes.`
+            );
+            
             throw error;
         }
     }
@@ -276,14 +293,14 @@ class SessionManager {
                     session.qrTimestamp = Date.now();
                 }
 
-                // Timeout QR augmenté à 5 minutes
+                // Timeout QR augmenté à 8 minutes
                 qrTimeout = setTimeout(async () => {
                     const session = this.sessions.get(sessionId);
                     if (session && session.status === 'qr_generated') {
                         log.warn(`⏰ QR Timeout pour ${userId}`);
                         await this.sendMessage(userId, 
                             "⏰ *QR Code expiré*\n\n" +
-                            "Le QR code a expiré après 5 minutes.\n\n" +
+                            "Le QR code a expiré après 8 minutes.\n\n" +
                             "Veuillez:\n" +
                             "• Redémarrer la connexion avec /connect\n" +
                             "• Scanner le nouveau QR code rapidement\n" +
@@ -291,7 +308,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 300000); // 5 minutes
+                }, 480000); // 8 minutes
 
                 // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
                 await this.sendQRCode(userId, qr, sessionId);
@@ -311,7 +328,7 @@ class SessionManager {
                 log.info(`🔄 Nouvelle connexion détectée pour ${userId}`);
             }
 
-            // Timeout de connexion général augmenté à 10 minutes
+            // Timeout de connexion général augmenté à 12 minutes
             if (connection === "connecting" && !qr) {
                 connectionTimeout = setTimeout(async () => {
                     const session = this.sessions.get(sessionId);
@@ -328,7 +345,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 600000); // 10 minutes
+                }, 720000); // 12 minutes
             }
         });
 
@@ -371,33 +388,20 @@ class SessionManager {
                 connected_at: new Date().toISOString()
             });
 
-            let message = `✅ *Connexion WhatsApp Réussie!*\n\n`;
-            message += `Utilisateur: ${user.name || user.id}\n`;
-            message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\n`;
+            let message = `✅ *Connexion WhatsApp Réussie!*\\n\\n`;
+            message += `Utilisateur: ${user.name || user.id}\\n`;
+            message += `Méthode: ${session.connectionMethod === 'pairing' ? 'Code Pairing' : 'QR Code'}\\n`;
             
             if (session.subscriptionActive) {
                 const access = await this.authManager.checkUserAccess(userId);
-                message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\n`;
-                message += `\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
+                message += `💎 *Abonnement ${access.plan}* - ${access.daysLeft} jours restants\\n`;
+                message += `\\n🔐 *SESSION PERMANENTE* - Reste active jusqu'au ${access.endDate}`;
             }
             
-            message += `\n\nVous pouvez maintenant utiliser le bot!`;
-            message += `\n\nTapez *!help* pour voir les commandes disponibles.`;
+            message += `\\n\\nVous pouvez maintenant utiliser le bot!`;
 
-            // ENVOYER LE MESSAGE SUR WHATSAPP DIRECTEMENT
-            try {
-                await sock.sendMessage(sock.user.id, { text: message });
-                log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
-            } catch (whatsappError) {
-                log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
-            }
-
-            // AUSSI ENVOYER VIA TELEGRAM POUR CONFIRMATION
-            await this.sendMessage(userId, 
-                `✅ *Connexion WhatsApp réussie!*\n\n` +
-                `Votre session est maintenant active.\n` +
-                `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
-            );
+            await this.sendMessage(userId, message);
+            log.success(`✅ Message de connexion envoyé à ${userId}`);
 
             log.success(`🎯 Session ${sessionId} complètement initialisée`);
 
@@ -422,31 +426,13 @@ class SessionManager {
     async handleWhatsAppMessage(message, sessionId) {
         try {
             const session = this.sessions.get(sessionId);
-            if (!session) {
-                log.error(`❌ Session ${sessionId} non trouvée pour message`);
-                return;
-            }
-
-            // Vérifier que le socket est valide
-            if (!session.socket || !session.socket.user) {
-                log.error(`❌ Socket invalide pour session ${sessionId}`);
-                return;
-            }
+            if (!session) return;
 
             const text = message.message?.conversation || 
                         message.message?.extendedTextMessage?.text || '';
             const sender = message.key.remoteJid;
-            
-            // Ignorer les messages vides ou des messages système
-            if (!text || message.key.fromMe) {
-                return;
-            }
-
-            log.info(`📨 Message WhatsApp de ${sender}: ${text.substring(0, 50)}`);
-
             const userSettings = this.getUserSetting(session.userId);
             
-            // Vérifier le mode privé
             if (userSettings.private_mode) {
                 const allowedUsers = userSettings.allowed_users || [];
                 const senderNumber = sender.split('@')[0];
@@ -463,16 +449,8 @@ class SessionManager {
                 }
             }
 
-            // Gérer les commandes
             if (text.startsWith('!')) {
                 await this.handleWhatsAppCommand(text, message, sessionId, userSettings);
-            } else {
-                // Répondre aux messages normaux
-                if (!userSettings.silent_mode) {
-                    await session.socket.sendMessage(sender, {
-                        text: `🤖 *NOVA-MD Bot*\n\nPour voir les commandes disponibles, tapez:\n*!help*`
-                    });
-                }
             }
 
         } catch (error) {
@@ -488,249 +466,135 @@ class SessionManager {
             const args = commandText.slice(1).trim().split(/ +/);
             const command = args.shift().toLowerCase();
             
-            // Créer le contexte pour la commande
-            const context = {
-                sock: session.socket,
-                msg: message,
-                args: args,
-                sessionManager: this,
-                commands: this.commands
-            };
-
-            // Exécuter la commande si elle existe
-            const commandHandler = this.commands.get(command);
-            if (commandHandler && commandHandler.run) {
-                await commandHandler.run(context);
-            } else {
-                // Commande non trouvée
-                if (!userSettings.silent_mode) {
-                    await session.socket.sendMessage(sender, {
-                        text: "❌ *Commande inconnue*\n\nUtilisez `!help` pour voir les commandes disponibles."
-                    });
-                }
+            if (command === 'silent') {
+                await this.handleSilentCommand(args, sender, session, userSettings);
+                return;
             }
+            
+            if (command === 'private') {
+                await this.handlePrivateCommand(args, sender, session, userSettings);
+                return;
+            }
+            
+            if (command === 'settings') {
+                await this.handleSettingsCommand(sender, session, userSettings);
+                return;
+            }
+            
+            if (command === 'help') {
+                await this.handleHelpCommand(sender, session, userSettings);
+                return;
+            }
+
+            await this.executeWhatsAppCommand(command, args, message, sessionId, userSettings);
             
         } catch (error) {
             log.error('❌ Erreur commande WhatsApp:', error);
-            if (!userSettings.silent_mode) {
-                await session.socket.sendMessage(sender, {
-                    text: "❌ *Erreur lors de l'exécution de la commande*"
-                });
-            }
         }
     }
 
-    async initializeWhatsAppCommands() {
-        try {
-            // Charger les commandes de base
-            const commandsPath = path.join(__dirname, '../commands');
-            
-            // Créer le dossier commands s'il n'existe pas
-            if (!fs.existsSync(commandsPath)) {
-                fs.mkdirSync(commandsPath, { recursive: true });
-                log.info('📁 Dossier commands créé');
-            }
-
-            // Créer les commandes de base si elles n'existent pas
-            await this.createDefaultCommands();
-            
-            // Charger toutes les commandes
-            const files = fs.readdirSync(commandsPath);
-            
-            for (const file of files) {
-                if (file.endsWith('.js')) {
-                    try {
-                        const commandPath = path.join(commandsPath, file);
-                        const command = require(commandPath);
-                        
-                        if (command.name && command.run) {
-                            this.commands.set(command.name, command);
-                            
-                            if (command.aliases && Array.isArray(command.aliases)) {
-                                command.aliases.forEach(alias => {
-                                    this.commands.set(alias, command);
-                                });
-                            }
-                            
-                            log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
-                        }
-                    } catch (error) {
-                        log.error(`❌ Erreur chargement commande ${file}:`, error);
-                    }
-                }
-            }
-            
-            log.success('✅ Commandes WhatsApp initialisées');
-        } catch (error) {
-            log.error('❌ Erreur initialisation commandes WhatsApp:', error);
-        }
-    }
-
-    async createDefaultCommands() {
-        const commandsPath = path.join(__dirname, '../commands');
+    async handleSilentCommand(args, sender, session, userSettings) {
+        const newSilentMode = !userSettings.silent_mode;
         
-        const defaultCommands = {
-            'help.js': `
-const log = require('../utils/logger')(module);
-
-module.exports = {
-    name: 'help',
-    description: "Affiche le menu d'aide",
-    category: 'information',
-    aliases: ['aide', 'menu'],
-    
-    run: async (context) => {
-        try {
-            const { sock, msg } = context;
-            const remoteJid = msg.key.remoteJid;
+        await this.saveUserSetting(session.userId, {
+            silent_mode: newSilentMode
+        });
+        
+        const responseText = newSilentMode ?
+            "🔇 *Mode silencieux activé*\n\nToutes les commandes sont maintenant invisibles pour les autres.\nSeul vous verrez les résultats." :
+            "🔊 *Mode silencieux désactivé*\n\nLes commandes sont maintenant visibles par tous.";
             
-            const helpText = `🤖 *Commandes NOVA-MD WhatsApp*
+        await this.sendMessageWithMode(sender, session, responseText, userSettings);
+    }
 
-⚙️ *Configuration:*
+    async handlePrivateCommand(args, sender, session, userSettings) {
+        const newPrivateMode = !userSettings.private_mode;
+        let responseText = "";
+        
+        if (newPrivateMode && args.length > 0) {
+            const users = args.map(u => u.replace('+', '').replace(/\D/g, ''));
+            await this.saveUserSetting(session.userId, {
+                private_mode: true,
+                allowed_users: users
+            });
+            responseText = `🔒 *Mode privé activé*\n\nUtilisateurs autorisés: ${users.join(', ')}\n\nSeules ces personnes peuvent utiliser le bot.`;
+        } else if (newPrivateMode) {
+            await this.saveUserSetting(session.userId, {
+                private_mode: true,
+                allowed_users: ['all']
+            });
+            responseText = "🔒 *Mode privé activé*\n\nTout le monde peut utiliser le bot pour le moment.\nUtilisez `!private +237612345678 +237698765432` pour restreindre à des numéros spécifiques.";
+        } else {
+            await this.saveUserSetting(session.userId, {
+                private_mode: false,
+                allowed_users: []
+            });
+            responseText = "🔓 *Mode privé désactivé*\n\nTout le monde peut maintenant utiliser le bot.";
+        }
+        
+        await this.sendMessageWithMode(sender, session, responseText, userSettings);
+    }
+
+    async handleSettingsCommand(sender, session, userSettings) {
+        const settingsText = `⚙️ *Paramètres de votre bot*
+
+🔇 Mode silencieux: ${userSettings.silent_mode ? '✅ Activé' : '❌ Désactivé'}
+🔒 Mode privé: ${userSettings.private_mode ? '✅ Activé' : '❌ Désactivé'}
+
+${userSettings.private_mode ? `👥 Utilisateurs autorisés: ${userSettings.allowed_users?.join(', ') || 'Tout le monde'}` : ''}
+
+*Commandes disponibles:*
 !silent - Activer/désactiver le mode silencieux
+!private - Gérer l'accès au bot
+!private +237612345678 - Autoriser un numéro spécifique
+!private all - Autoriser tout le monde
+!settings - Voir ces paramètres
+!help - Voir toutes les commandes`;
+
+        await this.sendMessageWithMode(sender, session, settingsText, userSettings);
+    }
+
+    async handleHelpCommand(sender, session, userSettings) {
+        const helpText = `🤖 *Commandes NOVA-MD WhatsApp*
+
+⚙️ *Commandes de configuration:*
+!silent - Rendre les commandes invisibles
 !private - Contrôler qui peut utiliser le bot
 !settings - Voir les paramètres
+!help - Afficher cette aide
 
-📊 *Information:*
+📊 *Commandes d'information:*
 !status - Statut de votre session
 !info - Informations du bot
 
-🔧 *Utilitaires:*
+🔧 *Commandes utilitaires:*
 !ping - Tester la connexion
 !time - Heure actuelle
 
-💡 *Astuce:* Utilisez !silent pour que seul vous voyez les réponses.`;
+*Astuce:* Utilisez \`!silent\` pour que seul vous voyez les réponses.`;
 
-            await sock.sendMessage(remoteJid, { text: helpText });
-            log.info(`✅ Help command executed for ${remoteJid}`);
-            
-        } catch (error) {
-            log.error(`❌ Erreur commande help: ${error.message}`);
-        }
+        await this.sendMessageWithMode(sender, session, helpText, userSettings);
     }
-};
-            `,
-            'ping.js': `
-const log = require('../utils/logger')(module);
 
-module.exports = {
-    name: 'ping',
-    description: "Test de connexion",
-    category: 'utility',
-    
-    run: async (context) => {
-        try {
-            const { sock, msg } = context;
-            const remoteJid = msg.key.remoteJid;
-            const start = Date.now();
-            
-            await sock.sendMessage(remoteJid, { text: "🏓 *Pong!*" });
-            const latency = Date.now() - start;
-            
-            await sock.sendMessage(remoteJid, { 
-                text: `🏓 *Pong!*\nLatence: ${latency}ms` 
-            });
-            
-            log.info(`✅ Ping command executed - Latency: ${latency}ms`);
-            
-        } catch (error) {
-            log.error(`❌ Erreur commande ping: ${error.message}`);
-        }
-    }
-};
-            `,
-            'status.js': `
-const log = require('../utils/logger')(module);
-
-module.exports = {
-    name: 'status',
-    description: "Statut de la session",
-    category: 'information',
-    
-    run: async (context) => {
-        try {
-            const { sock, msg, sessionManager } = context;
-            const remoteJid = msg.key.remoteJid;
-            
-            // Trouver la session
-            const session = Array.from(sessionManager.sessions.values())
-                .find(s => s.socket === sock);
-                
-            if (session) {
+    async executeWhatsAppCommand(command, args, message, sessionId, userSettings) {
+        const session = this.sessions.get(sessionId);
+        const sender = message.key.remoteJid;
+        
+        switch (command) {
+            case 'status':
                 const statusText = `📊 *Statut de votre session*
 
 🔐 Type: ${session.subscriptionActive ? 'Session permanente' : 'Session essai'}
 📱 Connecté depuis: ${Math.round((Date.now() - session.createdAt) / (1000 * 60 * 60 * 24))} jours
-👤 Utilisateur ID: ${session.userId}`;
-                
-                await sock.sendMessage(remoteJid, { text: statusText });
-                log.info(`✅ Status command executed for ${session.userId}`);
-            } else {
-                await sock.sendMessage(remoteJid, { 
-                    text: "❌ Session non trouvée" 
-                });
-            }
-            
-        } catch (error) {
-            log.error(`❌ Erreur commande status: ${error.message}`);
-        }
-    }
-};
-            `,
-            'silent.js': `
-const log = require('../utils/logger')(module);
+⚙️ Mode silencieux: ${userSettings.silent_mode ? '✅ Activé' : '❌ Désactivé'}
+🔒 Accès restreint: ${userSettings.private_mode ? '✅ Activé' : '❌ Désactivé'}
 
-module.exports = {
-    name: 'silent',
-    description: "Activer/désactiver le mode silencieux",
-    category: 'configuration',
-    
-    run: async (context) => {
-        try {
-            const { sock, msg, sessionManager } = context;
-            const remoteJid = msg.key.remoteJid;
-            
-            // Trouver la session
-            const session = Array.from(sessionManager.sessions.values())
-                .find(s => s.socket === sock);
+💡 Utilisez \`!settings\` pour modifier les paramètres.`;
+                await this.sendMessageWithMode(sender, session, statusText, userSettings);
+                break;
                 
-            if (session) {
-                const userSettings = sessionManager.getUserSetting(session.userId);
-                const newSilentMode = !userSettings.silent_mode;
-                
-                await sessionManager.saveUserSetting(session.userId, {
-                    silent_mode: newSilentMode
-                });
-                
-                const responseText = newSilentMode ?
-                    "🔇 *Mode silencieux activé*\n\nToutes les commandes sont maintenant invisibles pour les autres.\nSeul vous verrez les résultats." :
-                    "🔊 *Mode silencieux désactivé*\n\nLes commandes sont maintenant visibles par tous.";
-                    
-                await sock.sendMessage(remoteJid, { text: responseText });
-                log.info(`✅ Silent mode ${newSilentMode ? 'activated' : 'deactivated'} for ${session.userId}`);
-            }
-            
-        } catch (error) {
-            log.error(`❌ Erreur commande silent: ${error.message}`);
-        }
-    }
-};
-            `,
-            'info.js': `
-const log = require('../utils/logger')(module);
-const config = require('../config');
-
-module.exports = {
-    name: 'info',
-    description: "Informations du bot",
-    category: 'information',
-    
-    run: async (context) => {
-        try {
-            const { sock, msg } = context;
-            const remoteJid = msg.key.remoteJid;
-            
-            const infoText = `🤖 *NOVA-MD Premium*
+            case 'info':
+                const infoText = `🤖 *NOVA-MD Premium*
 
 Version: ${config.bot.version}
 Sessions: ✅ Persistantes
@@ -742,24 +606,45 @@ Support: ${config.bot.support_contact}
 • Contrôle d'accès
 • Commandes audio avancées
 • Support 24/7`;
+                await this.sendMessageWithMode(sender, session, infoText, userSettings);
+                break;
+                
+            case 'ping':
+                const start = Date.now();
+                await this.sendMessageWithMode(sender, session, "🏓 *Pong!*", userSettings);
+                const latency = Date.now() - start;
+                await this.sendMessageWithMode(sender, session, `🏓 *Pong!*\nLatence: ${latency}ms`, userSettings);
+                break;
+                
+            case 'time':
+                const now = new Date();
+                const timeText = `🕐 *Heure actuelle*
 
-            await sock.sendMessage(remoteJid, { text: infoText });
-            log.info(`✅ Info command executed for ${remoteJid}`);
-            
-        } catch (error) {
-            log.error(`❌ Erreur commande info: ${error.message}`);
+Date: ${now.toLocaleDateString('fr-FR')}
+Heure: ${now.toLocaleTimeString('fr-FR')}
+Fuseau: UTC+1 (Afrique/Douala)`;
+                await this.sendMessageWithMode(sender, session, timeText, userSettings);
+                break;
+                
+            default:
+                if (!userSettings.silent_mode) {
+                    await session.socket.sendMessage(sender, {
+                        text: "❌ *Commande inconnue*\n\nUtilisez `!help` pour voir les commandes disponibles."
+                    });
+                }
+                break;
         }
     }
-};
-            `
-        };
 
-        for (const [filename, content] of Object.entries(defaultCommands)) {
-            const filePath = path.join(commandsPath, filename);
-            if (!fs.existsSync(filePath)) {
-                fs.writeFileSync(filePath, content.trim());
-                log.success(`✅ Commande créée: ${filename}`);
+    async sendMessageWithMode(sender, session, text, userSettings) {
+        try {
+            if (userSettings.silent_mode) {
+                await session.socket.sendMessage(sender, { text: text });
+            } else {
+                await session.socket.sendMessage(sender, { text: text });
             }
+        } catch (error) {
+            log.error('❌ Erreur envoi message WhatsApp:', error);
         }
     }
 
@@ -790,7 +675,7 @@ Support: ${config.bot.support_contact}
             }
             
         } catch (error) {
-            log.error(`❌ Erreur envoi QR à ${userId} via HTTP: ${error.message}`);
+            log.error(`❌ Erreur envoi QR à ${userId} via HTTP:`, error.message);
             return false;
         }
     }
@@ -818,7 +703,7 @@ Support: ${config.bot.support_contact}
             }
             
         } catch (error) {
-            log.error(`❌ Erreur envoi pairing à ${userId} via HTTP: ${error.message}`);
+            log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message);
             return false;
         }
     }
@@ -845,7 +730,7 @@ Support: ${config.bot.support_contact}
             }
             
         } catch (error) {
-            log.error(`❌ Erreur envoi message à ${userId} via HTTP: ${error.message}`);
+            log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message);
             return false;
         }
     }
@@ -921,7 +806,7 @@ Support: ${config.bot.support_contact}
             await this.updateSessionStatus(sessionId, 'disconnected', disconnectData);
             
             if (session) {
-                let message = '❌ *Déconnexion WhatsApp*\\n\\n';
+                let message = '❌ *Déconnexion WhatsApp*\n\n';
                 
                 if (reason?.output?.statusCode === 401) {
                     if (session.subscriptionActive) {
@@ -977,7 +862,7 @@ Support: ${config.bot.support_contact}
             try {
                 await this.sendMessage(
                     session.userId,
-                    "❌ *Échec reconnexion automatique*\\n\\nUtilisez /connect pour vous reconnecter manuellement."
+                    "❌ *Échec reconnexion automatique*\n\nUtilisez /connect pour vous reconnecter manuellement."
                 );
             } catch (error) {
                 log.error(`❌ Erreur envoi message échec reconnexion à ${session.userId}:`, error);
@@ -1330,4 +1215,4 @@ Support: ${config.bot.support_contact}
     }
 }
 
-module.exports = SessionManager;
+module.exports = SessionManager; 

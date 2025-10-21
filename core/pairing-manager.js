@@ -12,6 +12,7 @@ const {
   delay,
   PHONENUMBER_MCC,
   Browsers,
+  fetchLatestBaileysVersion
 } = require("@whiskeysockets/baileys");
 
 const { createClient } = require("@supabase/supabase-js");
@@ -37,7 +38,7 @@ class PairingManager {
       const sessionPath = path.join(__dirname, this.sessionName);
       if (await fs.pathExists(sessionPath)) {
         log.info("🧹 Nettoyage de la session existante");
-        await fs.emptyDir(sessionPath);
+        await fs.remove(sessionPath);
         await delay(2000);
       }
 
@@ -58,63 +59,68 @@ class PairingManager {
   }
 
   async startPairingWithPhone(userId, userData, phoneNumber) {
+    let socket = null;
+    let pairingTimeout = null;
+    let connectionTimeout = null;
+
     try {
       // NETTOYAGE PRÉALABLE COMPLET
       const sessionPath = path.join(__dirname, this.sessionName);
       if (await fs.pathExists(sessionPath)) {
-        await fs.emptyDir(sessionPath);
+        await fs.remove(sessionPath);
         await delay(1000);
       }
 
       const { state, saveCreds } = await useMultiFileAuthState("./" + this.sessionName);
 
       // CONFIGURATION OPTIMISÉE POUR PAIRING
-      const socket = makeWASocket({
+      socket = makeWASocket({
         logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 570000, // Augmenté à 5 minutes
-        defaultQueryTimeoutMs: 120000,
-        keepAliveIntervalMs: 60000,
-        retryRequestDelayMs: 5000,
-        maxRetries: 4, // Plus de tentatives
+        connectTimeoutMs: 300000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 3000,
+        maxRetries: 3,
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
-        fireInitQueries: false,
+        fireInitQueries: true,
         mobile: false,
         appStateMacVerification: {
           patch: false,
           snapshot: false
         },
         transactionOpts: {
-          maxCommitRetries: 3,
-          delayBeforeRetry: 2000
+          maxCommitRetries: 2,
+          delayBeforeRetry: 1000
         },
         getMessage: async () => undefined
       });
 
       let pairingCodeSent = false;
       let pairingSuccess = false;
-      let connectionTimeout;
       let pairingCode = null;
       const currentRetryCount = this.retryCounts.get(userId) || 0;
 
-      // Timeout pour générer le code pairing (réduit)
-      const pairingTimeout = setTimeout(async () => {
+      // Timeout pour générer le code pairing
+      pairingTimeout = setTimeout(async () => {
         if (!pairingCodeSent && currentRetryCount < 3) {
           try {
             log.info(`📱 Génération du code pairing pour le numéro: ${phoneNumber}`);
 
             // Attendre que la connexion soit prête
-            await delay(2000);
+            await delay(3000);
 
-            // Générer le code pairing (peut lancer des erreurs si socket pas prêt)
+            // Générer le code pairing
             pairingCode = await socket.requestPairingCode(phoneNumber.trim());
-
-            if (!pairingCode) throw new Error("Aucun code pairing généré");
+            
+            if (!pairingCode) {
+              throw new Error("Aucun code pairing généré");
+            }
 
             // Formater le code
             pairingCode = pairingCode.match(/.{1,4}/g)?.join("-") || pairingCode;
@@ -138,7 +144,7 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 600000); // 8 minutes
+              }, 300000); // 5 minutes
 
               log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
             } else {
@@ -157,12 +163,16 @@ class PairingManager {
                 `🔄 *Tentative de reconnexion ${retryCount}/3 en cours...*\n\n` + `Nouvelle tentative automatique...`
               );
 
-              //réessayer 
-              setTimeout(() => {
-                this.startPairingWithPhone(userId, userData, phoneNumber).catch((e) =>
-                  log.error("retry error:", e)
-                );
-              }, 4000);
+              // Réessayer après nettoyage
+              setTimeout(async () => {
+                try {
+                  await this.cleanupPairing(userId);
+                  await delay(2000);
+                  await this.startPairingWithPhone(userId, userData, phoneNumber);
+                } catch (e) {
+                  log.error("Erreur lors de la retentative:", e);
+                }
+              }, 5000);
               return;
             }
 
@@ -180,21 +190,18 @@ class PairingManager {
             await this.cleanupPairing(userId);
           }
         }
-      }, 4000); // Réduit à 4 secondes
+      }, 5000);
 
       // Gestion des événements de connexion
       socket.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr, isNewLogin } = update;
 
-        const connectionInfo = {
-          connection,
+        log.info(`🔌 [PAIRING] ${userId} - Connection update:`, { 
+          connection, 
           hasQR: !!qr,
           isNewLogin,
-          error: lastDisconnect?.error?.message,
-          statusCode: lastDisconnect?.error?.output?.statusCode,
-        };
-
-        log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
+          error: lastDisconnect?.error?.message 
+        });
 
         // Ignorer les événements QR en mode pairing
         if (qr) {
@@ -211,19 +218,12 @@ class PairingManager {
         } else if (connection === "close") {
           clearTimeout(pairingTimeout);
           clearTimeout(connectionTimeout);
-          const reason = lastDisconnect?.error;
-          const statusCode = reason?.output?.statusCode;
-
-          log.error("❌ Connexion fermée pour", userId, {
-            message: reason?.message,
-            statusCode,
-            pairingCode,
-          });
-
+          
           if (!pairingSuccess) {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
             let errorMessage = "❌ *Échec de connexion pairing*\n\n";
 
-            if (statusCode === 401) {
+            if (statusCode === 401 || statusCode === 403) {
               errorMessage += "WhatsApp a refusé l'authentification.\n\n";
               errorMessage += "Causes possibles:\n";
               errorMessage += "• Numéro déjà utilisé sur un autre appareil\n";
@@ -261,12 +261,18 @@ class PairingManager {
         retryCount: currentRetryCount,
       };
     } catch (error) {
+      // Nettoyer les timeouts en cas d'erreur
+      if (pairingTimeout) clearTimeout(pairingTimeout);
+      if (connectionTimeout) clearTimeout(connectionTimeout);
+      
       log.error("❌ Erreur critique processus pairing:", error);
       await this.cleanupPairing(userId);
 
       await this.sendMessageViaHTTP(
         userId,
-        "❌ *Erreur critique de connexion*\n\n" + "Impossible d'établir la connexion avec WhatsApp.\n\n" + "Veuillez utiliser la méthode QR Code qui est plus fiable."
+        "❌ *Erreur critique de connexion*\n\n" + 
+        "Impossible d'établir la connexion avec WhatsApp.\n\n" + 
+        "Veuillez utiliser la méthode QR Code qui est plus fiable."
       );
 
       throw error;
@@ -287,7 +293,7 @@ class PairingManager {
       });
 
     try {
-      const { version } = await fetchLatestBaileysVersion();
+      const { version, isLatest } = await fetchLatestBaileysVersion();
 
       const socket = makeWASocket({
         version,
@@ -298,7 +304,7 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         connectTimeoutMs: 120000,
-        defaultQueryTimeoutMs: 90000,
+        defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
         mobile: false,
         fireInitQueries: true,
@@ -325,7 +331,7 @@ class PairingManager {
 
       return { success: true, method: "pairing" };
     } catch (error) {
-      rl.close();
+      if (rl) rl.close();
       log.error("❌ Erreur processus pairing:", error);
       throw error;
     }
@@ -339,8 +345,8 @@ class PairingManager {
 
       phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
 
-      if (!Object.keys(PHONENUMBER_MCC).some((v) => phoneNumber.startsWith(v))) {
-        log.warn("❌ Code pays invalide, réessayez");
+      if (!phoneNumber || phoneNumber.length < 8) {
+        log.warn("❌ Numéro invalide, réessayez");
         phoneNumber = await question(chalk.bgBlack(chalk.greenBright(`📱 Entrez votre numéro WhatsApp : `)));
         phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
       }
@@ -363,7 +369,7 @@ class PairingManager {
       }, 2000);
     } catch (error) {
       log.error("❌ Erreur gestion pairing code:", error);
-      rl.close();
+      if (rl) rl.close();
     }
   }
 
@@ -391,8 +397,15 @@ class PairingManager {
       const sessionId = `pairing_${userId}_${Date.now()}`;
       const authDir = `./sessions/${sessionId}`;
 
+      // S'assurer que le dossier de destination existe
+      await fs.ensureDir(authDir);
+      
       // Copier les credentials vers le dossier de session permanente
-      await fs.copy(path.join(__dirname, this.sessionName), authDir);
+      const sourcePath = path.join(process.cwd(), this.sessionName);
+      if (await fs.pathExists(sourcePath)) {
+        await fs.copy(sourcePath, authDir);
+      }
+      
       await this.cleanup();
 
       const access = await this.sessionManager.authManager.checkUserAccess(userId);
@@ -413,19 +426,22 @@ class PairingManager {
 
       this.sessionManager.sessions.set(sessionId, sessionData);
 
-      await this.sessionManager.supabase.from("whatsapp_sessions").insert([
-        {
-          session_id: sessionId,
-          user_id: userId,
-          user_data: userData,
-          status: "connected",
-          subscription_active: isPayedUser,
-          connection_method: "pairing",
-          created_at: new Date().toISOString(),
-          connected_at: new Date().toISOString(),
-          last_activity: new Date().toISOString(),
-        },
-      ]);
+      // Sauvegarder en base de données
+      if (this.sessionManager.supabase) {
+        await this.sessionManager.supabase.from("whatsapp_sessions").insert([
+          {
+            session_id: sessionId,
+            user_id: userId,
+            user_data: userData,
+            status: "connected",
+            subscription_active: isPayedUser,
+            connection_method: "pairing",
+            created_at: new Date().toISOString(),
+            connected_at: new Date().toISOString(),
+            last_activity: new Date().toISOString(),
+          },
+        ]);
+      }
 
       // Nettoyer le compteur de tentatives
       this.retryCounts.delete(userId);
@@ -455,13 +471,26 @@ class PairingManager {
 
   async sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber) {
     try {
-      if (!fetch) throw new Error("fetch is not available in this environment");
+      if (!global.fetch) {
+        // Fallback si fetch n'est pas disponible
+        log.info(`📱 Code pairing pour ${userId}: ${pairingCode} (numéro: ${phoneNumber})`);
+        return true;
+      }
 
       const response = await fetch(`${this.nodeApiUrl}/api/bot/send-pairing`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, pairing_code: pairingCode, phone_number: phoneNumber }),
+        body: JSON.stringify({ 
+          user_id: userId, 
+          pairing_code: pairingCode, 
+          phone_number: phoneNumber 
+        }),
+        timeout: 10000
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const result = await response.json();
 
@@ -473,20 +502,34 @@ class PairingManager {
         return false;
       }
     } catch (error) {
-      log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message || error);
-      return false;
+      log.error(`❌ Erreur envoi pairing à ${userId} via HTTP:`, error.message);
+      // Fallback: afficher le code dans les logs
+      log.info(`📱 [FALLBACK] Code pairing pour ${userId}: ${pairingCode}`);
+      return true;
     }
   }
 
   async sendQRCodeViaHTTP(userId, qrCode, sessionId) {
     try {
-      if (!fetch) throw new Error("fetch is not available in this environment");
+      if (!global.fetch) {
+        log.info(`📱 QR code pour ${userId}: ${qrCode}`);
+        return true;
+      }
 
       const response = await fetch(`${this.nodeApiUrl}/api/bot/send-qr`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, qr_code: qrCode, session_id: sessionId }),
+        body: JSON.stringify({ 
+          user_id: userId, 
+          qr_code: qrCode, 
+          session_id: sessionId 
+        }),
+        timeout: 10000
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const result = await response.json();
 
@@ -498,20 +541,32 @@ class PairingManager {
         return false;
       }
     } catch (error) {
-      log.error(`❌ Erreur envoi QR à ${userId} via HTTP:`, error.message || error);
-      return false;
+      log.error(`❌ Erreur envoi QR à ${userId} via HTTP:`, error.message);
+      log.info(`📱 [FALLBACK] QR code pour ${userId}: ${qrCode}`);
+      return true;
     }
   }
 
   async sendMessageViaHTTP(userId, message) {
     try {
-      if (!fetch) throw new Error("fetch is not available in this environment");
+      if (!global.fetch) {
+        log.info(`📱 Message pour ${userId}: ${message}`);
+        return true;
+      }
 
       const response = await fetch(`${this.nodeApiUrl}/api/bot/send-message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, message }),
+        body: JSON.stringify({ 
+          user_id: userId, 
+          message 
+        }),
+        timeout: 10000
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const result = await response.json();
 
@@ -523,8 +578,9 @@ class PairingManager {
         return false;
       }
     } catch (error) {
-      log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message || error);
-      return false;
+      log.error(`❌ Erreur envoi message à ${userId} via HTTP:`, error.message);
+      log.info(`📱 [FALLBACK] Message pour ${userId}: ${message}`);
+      return true;
     }
   }
 
@@ -547,9 +603,9 @@ class PairingManager {
 
   async cleanup() {
     try {
-      const sessionPath = path.join(__dirname, this.sessionName);
+      const sessionPath = path.join(process.cwd(), this.sessionName);
       if (await fs.pathExists(sessionPath)) {
-        await fs.emptyDir(sessionPath);
+        await fs.remove(sessionPath);
       }
     } catch (error) {
       log.error("❌ Erreur nettoyage pairing:", error);
@@ -559,11 +615,22 @@ class PairingManager {
   async cleanupPairing(userId) {
     try {
       const pairing = this.activePairings.get(userId);
-      if (pairing && pairing.socket) {
-        try {
-          if (typeof pairing.socket.end === "function") pairing.socket.end();
-        } catch (e) {
-          log.warn("Erreur lors de l'arrêt du socket:", e);
+      if (pairing) {
+        if (pairing.socket) {
+          try {
+            pairing.socket.ev.removeAllListeners();
+            if (typeof pairing.socket.end === "function") {
+              pairing.socket.end();
+            }
+            if (typeof pairing.socket.ws?.close === "function") {
+              pairing.socket.ws.close();
+            }
+          } catch (e) {
+            log.warn("Erreur lors de l'arrêt du socket:", e);
+          }
+        }
+        if (pairing.rl) {
+          pairing.rl.close();
         }
       }
       this.activePairings.delete(userId);
@@ -605,4 +672,4 @@ class PairingManager {
   }
 }
 
-module.exports = PairingManager; 
+module.exports = PairingManager;

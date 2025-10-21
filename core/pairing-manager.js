@@ -25,6 +25,8 @@ class PairingManager {
     this.activePairings = new Map();
     this.nodeApiUrl = process.env.NODE_API_URL || 'http://localhost:3000';
     this.retryCounts = new Map();
+    this.pairingTimeouts = new Map();
+    this.connectionTimeouts = new Map();
   }
 
   async initializePairing(userId, userData, phoneNumber = null) {
@@ -35,15 +37,14 @@ class PairingManager {
       if (sessionExists) {
         log.info("🧹 Nettoyage de la session existante");
         await fs.emptyDir(path.join(__dirname, this.sessionName));
-        await delay(1000);
+        await delay(2000);
       }
 
-      // Réinitialiser le compteur de tentatives
       this.retryCounts.set(userId, 0);
+      this.cleanupUserTimeouts(userId);
 
-      // Si numéro fourni, l'utiliser directement
       if (phoneNumber) {
-        log.info(`📱 Utilisation du numéro fourni pour ${userId}`);
+        log.info(`📱 Utilisation du numéro fourni pour ${userId}: ${phoneNumber}`);
         return await this.startPairingWithPhone(userId, userData, phoneNumber);
       } else {
         return await this.startPairingProcess(userId, userData);
@@ -52,6 +53,20 @@ class PairingManager {
     } catch (error) {
       log.error('❌ Erreur initialisation pairing:', error);
       throw error;
+    }
+  }
+
+  cleanupUserTimeouts(userId) {
+    const pairingTimeout = this.pairingTimeouts.get(userId);
+    const connectionTimeout = this.connectionTimeouts.get(userId);
+    
+    if (pairingTimeout) {
+      clearTimeout(pairingTimeout);
+      this.pairingTimeouts.delete(userId);
+    }
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      this.connectionTimeouts.delete(userId);
     }
   }
 
@@ -72,7 +87,7 @@ class PairingManager {
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 300000, // Augmenté à 5 minutes
+        connectTimeoutMs: 300000,
         defaultQueryTimeoutMs: 120000,
         keepAliveIntervalMs: 30000,
         mobile: false
@@ -111,7 +126,6 @@ class PairingManager {
     const { state, saveCreds } = await useMultiFileAuthState("./" + this.sessionName);
     
     try {
-      // CONFIGURATION ULTRA-STABLE pour WhatsApp - Timeouts augmentés
       const socket = makeWASocket({
         logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu('Chrome'),
@@ -119,11 +133,11 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 300000, // Augmenté à 5 minutes
+        connectTimeoutMs: 300000,
         defaultQueryTimeoutMs: 120000,
         keepAliveIntervalMs: 30000,
         retryRequestDelayMs: 5000,
-        maxRetries: 5, // Plus de tentatives
+        maxRetries: 5,
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
         fireInitQueries: false,
@@ -141,18 +155,15 @@ class PairingManager {
 
       let pairingCodeSent = false;
       let pairingSuccess = false;
-      let connectionTimeout;
       let pairingCode = null;
       
       const currentRetryCount = this.retryCounts.get(userId) || 0;
       
-      // Timeout pour générer le code pairing augmenté à 30 secondes
       const pairingTimeout = setTimeout(async () => {
         if (!pairingCodeSent && currentRetryCount < 3) {
           try {
             log.info(`📱 Génération du code pairing pour le numéro: ${phoneNumber}`);
             
-            // Générer le code pairing avec gestion d'erreur avancée
             pairingCode = await socket.requestPairingCode(phoneNumber);
             pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
             
@@ -162,18 +173,16 @@ class PairingManager {
             
             log.success(`🔑 Code de pairing généré pour ${userId}: ${pairingCode}`);
             
-            // Utiliser le pont HTTP pour envoyer le code
             const sent = await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
             if (sent) {
               pairingCodeSent = true;
               
-              // Démarrer un timeout de connexion augmenté à 8 minutes
-              connectionTimeout = setTimeout(async () => {
+              const connectionTimeout = setTimeout(async () => {
                 if (!pairingSuccess) {
                   log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
                   await this.sendMessageViaHTTP(userId,
                     "⏰ *Timeout de connexion*\n\n" +
-                    "Le code de pairing n'a pas été utilisé dans les 8 minutes.\n\n" +
+                    "Le code de pairing n'a pas été utilisé dans les 10 minutes.\n\n" +
                     "Le code a expiré. Veuillez:\n" +
                     "1. Redémarrer le processus avec /connect\n" +
                     "2. Choisir à nouveau 'Pairing Code'\n" +
@@ -183,11 +192,12 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 480000); // 8 minutes
+              }, 600000);
+
+              this.connectionTimeouts.set(userId, connectionTimeout);
 
               log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
               
-              // Envoyer des instructions détaillées
               await this.sendMessageViaHTTP(userId,
                 `🔐 *Code de Pairing Généré!*\n\n` +
                 `📱 Pour: ${phoneNumber}\n` +
@@ -198,7 +208,7 @@ class PairingManager {
                 `3. Sélectionnez "Lier un appareil"\n` +
                 `4. Entrez le code ci-dessus\n` +
                 `5. Attendez la confirmation\n\n` +
-                `⏱️ *Ce code expire dans 8 minutes*`
+                `⏱️ *Ce code expire dans 10 minutes*`
               );
               
             } else {
@@ -218,14 +228,12 @@ class PairingManager {
                 `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`
               );
               
-              // Réessayer après 5 secondes
               setTimeout(() => {
                 this.startPairingWithPhone(userId, userData, phoneNumber);
-              }, 5000);
+              }, 10000);
               return;
             }
             
-            // Échec final après 3 tentatives
             await this.sendMessageViaHTTP(userId, 
               "❌ *Impossible de générer un code pairing*\n\n" +
               "Après 3 tentatives, le service WhatsApp ne répond pas.\n\n" +
@@ -242,9 +250,10 @@ class PairingManager {
             await this.cleanupPairing(userId);
           }
         }
-      }, 5000); // Augmenté à 5 secondes
+      }, 10000);
 
-      // Gestion des événements de connexion
+      this.pairingTimeouts.set(userId, pairingTimeout);
+
       socket.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr, isNewLogin } = update;
         
@@ -258,22 +267,19 @@ class PairingManager {
         
         log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
 
-        // Ignorer les événements QR en mode pairing
         if (qr) {
           log.info(`⚠️ QR ignoré pour ${userId} (mode pairing actif)`);
           return;
         }
         
         if (connection === "open") {
-          clearTimeout(pairingTimeout);
-          clearTimeout(connectionTimeout);
+          this.cleanupUserTimeouts(userId);
           pairingSuccess = true;
           log.success(`🎉 CONNEXION RÉUSSIE via pairing pour ${userId}`);
           await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
           
         } else if (connection === "close") {
-          clearTimeout(pairingTimeout);
-          clearTimeout(connectionTimeout);
+          this.cleanupUserTimeouts(userId);
           const reason = lastDisconnect?.error;
           const statusCode = reason?.output?.statusCode;
           
@@ -294,14 +300,13 @@ class PairingManager {
               errorMessage += "• Maintenance des serveurs\n\n";
               errorMessage += "🔄 *Reconnexion automatique en cours...*";
               
-              // Tentative de reconnexion automatique
               const retryCount = currentRetryCount + 1;
               if (retryCount < 2) {
                 this.retryCounts.set(userId, retryCount);
                 setTimeout(() => {
                   log.info(`🔄 Reconnexion automatique ${retryCount}/2 pour ${userId}`);
                   this.startPairingWithPhone(userId, userData, phoneNumber);
-                }, 5000);
+                }, 10000);
                 return;
               }
             } else if (statusCode === 401) {
@@ -329,7 +334,6 @@ class PairingManager {
 
       socket.ev.on("creds.update", saveCreds);
 
-      // Gestion des erreurs critiques
       socket.ev.process(async (events) => {
         if (events['connection.update']) {
           const update = events['connection.update'];
@@ -390,7 +394,6 @@ class PairingManager {
           
           log.success(`🔑 Code de pairing généré pour l'utilisateur ${userId}: ${code}`);
           
-          // Utiliser le pont HTTP pour envoyer le code
           await this.sendPairingCodeViaHTTP(userId, code, phoneNumber);
 
           console.log(
@@ -410,7 +413,6 @@ class PairingManager {
     }
   }
 
-  // MODIFIER la méthode handleSuccessfulPairing
   async handleSuccessfulPairing(socket, userId, userData, saveCreds, rl) {
     try {
         const sessionId = `pairing_${userId}_${Date.now()}`;
@@ -451,12 +453,10 @@ class PairingManager {
                 last_activity: new Date().toISOString()
             }]);
 
-        // Nettoyer le compteur de tentatives
         this.retryCounts.delete(userId);
         this.activePairings.delete(userId);
         if (rl) rl.close();
 
-        // ENVOYER UN MESSAGE DE BIENVENUE SUR WHATSAPP
         let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
         whatsappMessage += `✅ Méthode: Code de Pairing\n`;
         whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id}\n`;
@@ -473,7 +473,6 @@ class PairingManager {
         whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
         whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
 
-        // Envoyer le message sur WhatsApp
         try {
             await socket.sendMessage(socket.user.id, { text: whatsappMessage });
             log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
@@ -481,7 +480,6 @@ class PairingManager {
             log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
         }
 
-        // AUSSI ENVOYER VIA TELEGRAM
         await this.sendMessageViaHTTP(userId, 
             `✅ *Connexion WhatsApp réussie via Pairing!*\n\n` +
             `Votre session est maintenant active.\n` +
@@ -494,8 +492,7 @@ class PairingManager {
         log.error('❌ Erreur gestion pairing réussi:', error);
         if (rl) rl.close();
     }
-}
-  
+  }
 
   async handleConnectionClose(sessionId, lastDisconnect, userId, rl) {
     const pairing = this.activePairings.get(userId);
@@ -515,10 +512,6 @@ class PairingManager {
       this.activePairings.delete(userId);
     }
   }
-
-  // =========================================================================
-  // MÉTHODES PONT HTTP
-  // =========================================================================
 
   async sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber) {
     try {
@@ -630,6 +623,8 @@ class PairingManager {
 
   async cleanupPairing(userId) {
     try {
+      this.cleanupUserTimeouts(userId);
+      
       const pairing = this.activePairings.get(userId);
       if (pairing && pairing.socket) {
         await pairing.socket.end();

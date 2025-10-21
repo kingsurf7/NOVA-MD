@@ -20,14 +20,52 @@ class NovaMDApp {
         this.resourceManager = new ResourceManager();
         this.commandHandler = new CommandHandler();
         this.botWebhookUrl = process.env.BOT_WEBHOOK_URL || 'http://localhost:3001/webhook';
-        
+        this.commands = new Map();
         this.setupMiddleware();
         this.setupRoutes();
         this.initialize();
     }
 
-    
-    async initialize() {
+    // AJOUTER cette méthode pour charger les commandes WhatsApp
+	async loadWhatsAppCommands() {
+		try {
+			const commandsPath = path.join(__dirname, './commands');
+			// Vérifier si le dossier existe
+			if (!fs.existsSync(commandsPath)) {
+				log.warn('📁 Dossier commands non trouvé, création...');
+				fs.mkdirSync(commandsPath, { recursive: true });
+        		return;
+    		}
+        
+    		const files = fs.readdirSync(commandsPath);
+        	let loadedCount = 0;
+        
+    		for (const file of files) {
+        		if (file.endsWith('.js')) {
+            		try {
+                		const commandPath = path.join(commandsPath, file);
+                		const command = require(commandPath);
+                    
+                		if (command.name && command.run) {
+                    		this.commands.set(command.name, command);
+                    		loadedCount++;
+                    		log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
+                		}
+            		} catch (error) {
+                		log.error(`❌ Erreur chargement commande ${file}:`, error);
+                }
+        	}
+    	}
+        
+    		log.success(`📁 ${loadedCount} commandes WhatsApp chargées`);
+		} catch (error) {
+        log.error('❌ Erreur chargement commandes WhatsApp:', error);
+		}
+	}
+
+	// MODIFIER la méthode initialize
+	async initialize() {
+		await this.loadWhatsAppCommands(); // AJOUTER cette ligne
         await this.commandHandler.loadBuiltInCommands();
         
         // Tester la connexion avec le bot Python

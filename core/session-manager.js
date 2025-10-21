@@ -85,7 +85,6 @@ class SessionManager {
             const hasAccess = access.hasAccess || trial.hasTrial;
             
             if (!hasAccess) {
-                // Créer un essai automatique pour les nouveaux utilisateurs
                 const newTrial = await this.trialManager.createTrialSession(userId, userData);
                 if (!newTrial.success) {
                     throw new Error(`Accès refusé. ${newTrial.error}`);
@@ -143,13 +142,11 @@ class SessionManager {
             if (method === 'pairing' && phoneNumber) {
                 log.info(`🔐 Tentative de connexion pairing pour ${userId} avec ${phoneNumber}`);
                 
-                // VALIDATION CORRIGÉE : 8-15 chiffres
                 const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
                 if (!cleanNumber || cleanNumber.length < 8 || cleanNumber.length > 15) {
                     throw new Error(`Numéro invalide: ${cleanNumber.length} chiffres (attendu: 8-15 chiffres)`);
                 }
                 
-                // 🔒 Le numéro est passé mais ne sera pas sauvegardé
                 const result = await this.pairingManager.initializePairing(userId, userData, cleanNumber);
                 
                 if (result.success) {
@@ -164,7 +161,6 @@ class SessionManager {
         } catch (error) {
             log.error('❌ Erreur création session avec phone:', error);
             
-            // Informer l'utilisateur de l'échec
             await this.sendMessage(userId,
                 `❌ *Échec de la connexion pairing*\n\n` +
                 `Erreur: ${error.message}\n\n` +
@@ -185,15 +181,13 @@ class SessionManager {
             const sessionId = `qr_${userId}_${Date.now()}`;
             const authDir = `./sessions/${sessionId}`;
 
-            // Créer le dossier de session
             await fs.ensureDir(authDir);
 
             const { state, saveCreds } = await useMultiFileAuthState(authDir);
             
-            // CONFIGURATION ULTRA-STABLE
             const sock = makeWASocket({
                 auth: state,
-                logger: P({ level: "fatal" }), // Seulement les erreurs critiques
+                logger: P({ level: "fatal" }),
                 browser: Browsers.ubuntu('Chrome'),
                 printQRInTerminal: false,
                 syncFullHistory: false,
@@ -201,7 +195,7 @@ class SessionManager {
                 generateHighQualityLinkPreview: false,
                 emitOwnEvents: false,
                 defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 120000, // 2 minutes
+                connectTimeoutMs: 120000,
                 keepAliveIntervalMs: 30000,
                 maxRetries: 3,
                 mobile: false,
@@ -250,7 +244,6 @@ class SessionManager {
         } catch (error) {
             log.error('❌ Erreur création session QR:', error);
             
-            // Message d'erreur informatif
             await this.sendMessage(userId,
                 `❌ *Erreur de création de session*\n\n` +
                 `Impossible de créer la session WhatsApp.\n\n` +
@@ -279,12 +272,15 @@ class SessionManager {
                 isOnline
             });
 
-            // Nettoyer les timeouts précédents
             if (qrTimeout) clearTimeout(qrTimeout);
             if (connectionTimeout) clearTimeout(connectionTimeout);
 
             if (qr) {
                 log.info(`📱 QR généré pour ${userId} (${qr.length} caractères)`);
+                
+                // ENVOYER IMMÉDIATEMENT LE QR CODE
+                await this.sendQRCode(userId, qr, sessionId);
+                
                 await this.updateSessionStatus(sessionId, 'qr_generated', { qr_code: qr });
                 
                 const session = this.sessions.get(sessionId);
@@ -293,7 +289,6 @@ class SessionManager {
                     session.qrTimestamp = Date.now();
                 }
 
-                // Timeout QR augmenté à 8 minutes
                 qrTimeout = setTimeout(async () => {
                     const session = this.sessions.get(sessionId);
                     if (session && session.status === 'qr_generated') {
@@ -308,10 +303,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 480000); // 8 minutes
-
-                // Utiliser la nouvelle méthode d'envoi QR via pont HTTP
-                await this.sendQRCode(userId, qr, sessionId);
+                }, 480000);
             }
 
             if (connection === "open") {
@@ -328,7 +320,6 @@ class SessionManager {
                 log.info(`🔄 Nouvelle connexion détectée pour ${userId}`);
             }
 
-            // Timeout de connexion général augmenté à 12 minutes
             if (connection === "connecting" && !qr) {
                 connectionTimeout = setTimeout(async () => {
                     const session = this.sessions.get(sessionId);
@@ -345,7 +336,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 720000); // 12 minutes
+                }, 720000);
             }
         });
 
@@ -648,10 +639,6 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         }
     }
 
-    // =========================================================================
-    // MÉTHODES PONT HTTP - Communication avec Telegram via API
-    // =========================================================================
-
     async sendQRCode(userId, qrCode, sessionId) {
         try {
             const response = await fetch(`${this.nodeApiUrl}/api/bot/send-qr`, {
@@ -734,10 +721,6 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             return false;
         }
     }
-
-    // =========================================================================
-    // Méthodes de gestion des sessions
-    // =========================================================================
 
     async updateSessionStatus(sessionId, status, data = {}) {
         try {
@@ -1215,4 +1198,4 @@ Fuseau: UTC+1 (Afrique/Douala)`;
     }
 }
 
-module.exports = SessionManager; 
+module.exports = SessionManager;

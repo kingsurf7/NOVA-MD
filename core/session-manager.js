@@ -584,7 +584,7 @@ module.exports = {
             const { sock, msg } = context;
             const remoteJid = msg.key.remoteJid;
             
-            const helpText = \\\`🤖 *Commandes NOVA-MD WhatsApp*
+            const helpText = `🤖 *Commandes NOVA-MD WhatsApp*
 
 ⚙️ *Configuration:*
 !silent - Activer/désactiver le mode silencieux
@@ -599,13 +599,13 @@ module.exports = {
 !ping - Tester la connexion
 !time - Heure actuelle
 
-💡 *Astuce:* Utilisez \\\\\`!silent\\\\\` pour que seul vous voyez les réponses.\\\`;
+💡 *Astuce:* Utilisez \\`!silent\\` pour que seul vous voyez les réponses.`;
 
             await sock.sendMessage(remoteJid, { text: helpText });
-            log.info(\\\`✅ Help command executed for \\\${remoteJid}\\\`);
+            log.info(`✅ Help command executed for ${remoteJid}`);
             
         } catch (error) {
-            log.error(\\\`❌ Erreur commande help: \\\${error.message}\\\`);
+            log.error(`❌ Erreur commande help: ${error.message}`);
         }
     }
 };
@@ -628,13 +628,13 @@ module.exports = {
             const latency = Date.now() - start;
             
             await sock.sendMessage(remoteJid, { 
-                text: \\\`🏓 *Pong!*\\\\nLatence: \\\${latency}ms\\\` 
+                text: `🏓 *Pong!*\nLatence: ${latency}ms` 
             });
             
-            log.info(\\\`✅ Ping command executed - Latency: \\\${latency}ms\\\`);
+            log.info(`✅ Ping command executed - Latency: ${latency}ms`);
             
         } catch (error) {
-            log.error(\\\`❌ Erreur commande ping: \\\${error.message}\\\`);
+            log.error(`❌ Erreur commande ping: ${error.message}`);
         }
     }
 };
@@ -657,14 +657,14 @@ module.exports = {
                 .find(s => s.socket === sock);
                 
             if (session) {
-                const statusText = \\\`📊 *Statut de votre session*
+                const statusText = `📊 *Statut de votre session*
 
-🔐 Type: \\\${session.subscriptionActive ? 'Session permanente' : 'Session essai'}
-📱 Connecté depuis: \\\${Math.round((Date.now() - session.createdAt) / (1000 * 60 * 60 * 24))} jours
-👤 Utilisateur ID: \\\${session.userId}\\\`;
+🔐 Type: ${session.subscriptionActive ? 'Session permanente' : 'Session essai'}
+📱 Connecté depuis: ${Math.round((Date.now() - session.createdAt) / (1000 * 60 * 60 * 24))} jours
+👤 Utilisateur ID: ${session.userId}`;
                 
                 await sock.sendMessage(remoteJid, { text: statusText });
-                log.info(\\\`✅ Status command executed for \\\${session.userId}\\\`);
+                log.info(`✅ Status command executed for ${session.userId}`);
             } else {
                 await sock.sendMessage(remoteJid, { 
                     text: "❌ Session non trouvée" 
@@ -672,7 +672,7 @@ module.exports = {
             }
             
         } catch (error) {
-            log.error(\\\`❌ Erreur commande status: \\\${error.message}\\\`);
+            log.error(`❌ Erreur commande status: ${error.message}`);
         }
     }
 };
@@ -703,15 +703,15 @@ module.exports = {
                 });
                 
                 const responseText = newSilentMode ?
-                    "🔇 *Mode silencieux activé*\\\\n\\\\nToutes les commandes sont maintenant invisibles pour les autres.\\\\nSeul vous verrez les résultats." :
-                    "🔊 *Mode silencieux désactivé*\\\\n\\\\nLes commandes sont maintenant visibles par tous.";
+                    "🔇 *Mode silencieux activé*\n\nToutes les commandes sont maintenant invisibles pour les autres.\nSeul vous verrez les résultats." :
+                    "🔊 *Mode silencieux désactivé*\n\nLes commandes sont maintenant visibles par tous.";
                     
                 await sock.sendMessage(remoteJid, { text: responseText });
-                log.info(\\\`✅ Silent mode \\\${newSilentMode ? 'activated' : 'deactivated'} for \\\${session.userId}\\\`);
+                log.info(`✅ Silent mode ${newSilentMode ? 'activated' : 'deactivated'} for ${session.userId}`);
             }
             
         } catch (error) {
-            log.error(\\\`❌ Erreur commande silent: \\\${error.message}\\\`);
+            log.error(`❌ Erreur commande silent: ${error.message}`);
         }
     }
 };
@@ -730,24 +730,24 @@ module.exports = {
             const { sock, msg } = context;
             const remoteJid = msg.key.remoteJid;
             
-            const infoText = \\\`🤖 *NOVA-MD Premium*
+            const infoText = `🤖 *NOVA-MD Premium*
 
-Version: \\\${config.bot.version}
+Version: ${config.bot.version}
 Sessions: ✅ Persistantes
-Support: \\\${config.bot.support_contact}
+Support: ${config.bot.support_contact}
 
 *Fonctionnalités:*
 • Sessions WhatsApp permanentes
 • Mode silencieux
 • Contrôle d'accès
 • Commandes audio avancées
-• Support 24/7\\\`;
+• Support 24/7`;
 
             await sock.sendMessage(remoteJid, { text: infoText });
-            log.info(\\\`✅ Info command executed for \\\${remoteJid}\\\`);
+            log.info(`✅ Info command executed for ${remoteJid}`);
             
         } catch (error) {
-            log.error(\\\`❌ Erreur commande info: \\\${error.message}\\\`);
+            log.error(`❌ Erreur commande info: ${error.message}`);
         }
     }
 };
@@ -758,7 +758,7 @@ Support: \\\${config.bot.support_contact}
             const filePath = path.join(commandsPath, filename);
             if (!fs.existsSync(filePath)) {
                 fs.writeFileSync(filePath, content.trim());
-                log.success(\\\`✅ Commande créée: \\\${filename}\\\`);
+                log.success(`✅ Commande créée: ${filename}`);
             }
         }
     }
@@ -769,7 +769,7 @@ Support: \\\${config.bot.support_contact}
 
     async sendQRCode(userId, qrCode, sessionId) {
         try {
-            const response = await fetch(\\\`\\\${this.nodeApiUrl}/api/bot/send-qr\\\`, {
+            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-qr`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -782,22 +782,22 @@ Support: \\\${config.bot.support_contact}
             const result = await response.json();
             
             if (result.success) {
-                log.success(\\\`✅ QR code envoyé à \\\${userId} via pont HTTP\\\`);
+                log.success(`✅ QR code envoyé à ${userId} via pont HTTP`);
                 return true;
             } else {
-                log.error(\\\`❌ Échec envoi QR à \\\${userId}:\\\`, result.error);
+                log.error(`❌ Échec envoi QR à ${userId}:`, result.error);
                 return false;
             }
             
         } catch (error) {
-            log.error(\\\`❌ Erreur envoi QR à \\\${userId} via HTTP: \\\${error.message}\\\`);
+            log.error(`❌ Erreur envoi QR à ${userId} via HTTP: ${error.message}`);
             return false;
         }
     }
 
     async sendPairingCode(userId, pairingCode, phoneNumber) {
         try {
-            const response = await fetch(\\\`\\\${this.nodeApiUrl}/api/bot/send-pairing\\\`, {
+            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-pairing`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -810,22 +810,22 @@ Support: \\\${config.bot.support_contact}
             const result = await response.json();
             
             if (result.success) {
-                log.success(\\\`✅ Code pairing envoyé à \\\${userId} via pont HTTP\\\`);
+                log.success(`✅ Code pairing envoyé à ${userId} via pont HTTP`);
                 return true;
             } else {
-                log.error(\\\`❌ Échec envoi pairing à \\\${userId}:\\\`, result.error);
+                log.error(`❌ Échec envoi pairing à ${userId}:`, result.error);
                 return false;
             }
             
         } catch (error) {
-            log.error(\\\`❌ Erreur envoi pairing à \\\${userId} via HTTP: \\\${error.message}\\\`);
+            log.error(`❌ Erreur envoi pairing à ${userId} via HTTP: ${error.message}`);
             return false;
         }
     }
 
     async sendMessage(userId, message) {
         try {
-            const response = await fetch(\\\`\\\${this.nodeApiUrl}/api/bot/send-message\\\`, {
+            const response = await fetch(`${this.nodeApiUrl}/api/bot/send-message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -837,15 +837,15 @@ Support: \\\${config.bot.support_contact}
             const result = await response.json();
             
             if (result.success) {
-                log.success(\\\`✅ Message envoyé à \\\${userId} via pont HTTP\\\`);
+                log.success(`✅ Message envoyé à ${userId} via pont HTTP`);
                 return true;
             } else {
-                log.error(\\\`❌ Échec envoi message à \\\${userId}:\\\`, result.error);
+                log.error(`❌ Échec envoi message à ${userId}:`, result.error);
                 return false;
             }
             
         } catch (error) {
-            log.error(\\\`❌ Erreur envoi message à \\\${userId} via HTTP: \\\${error.message}\\\`);
+            log.error(`❌ Erreur envoi message à ${userId} via HTTP: ${error.message}`);
             return false;
         }
     }
@@ -910,7 +910,7 @@ Support: \\\${config.bot.support_contact}
             };
 
             if (reason?.output?.statusCode === 401 && session?.subscriptionActive) {
-                log.warn(\\\`🔌 Session expirée pour utilisateur payant: \\\${sessionId}\\\`);
+                log.warn(`🔌 Session expirée pour utilisateur payant: ${sessionId}`);
                 disconnectData.disconnect_reason = 'Session expired - Will attempt reconnect';
                 
                 setTimeout(() => {
@@ -941,7 +941,7 @@ Support: \\\${config.bot.support_contact}
                 try {
                     await this.sendMessage(session.userId, message);
                 } catch (error) {
-                    log.error(\\\`❌ Erreur envoi message déconnexion à \\\${session.userId}:\\\`, error);
+                    log.error(`❌ Erreur envoi message déconnexion à ${session.userId}:`, error);
                 }
             }
 
@@ -949,7 +949,7 @@ Support: \\\${config.bot.support_contact}
                 this.sessions.delete(sessionId);
             }
 
-            log.info(\\\`🔌 Session déconnectée: \\\${sessionId} - \\\${disconnectData.disconnect_reason}\\\`);
+            log.info(`🔌 Session déconnectée: ${sessionId} - ${disconnectData.disconnect_reason}`);
 
         } catch (error) {
             log.error('❌ Erreur gestion déconnexion:', error);
@@ -958,7 +958,7 @@ Support: \\\${config.bot.support_contact}
 
     async attemptReconnect(sessionId, session) {
         try {
-            log.info(\\\`🔄 Tentative de reconnexion pour \\\${sessionId}\\\`);
+            log.info(`🔄 Tentative de reconnexion pour ${sessionId}`);
             
             try {
                 await this.sendMessage(
@@ -966,13 +966,13 @@ Support: \\\${config.bot.support_contact}
                     "🔄 *Reconnexion automatique en cours...*"
                 );
             } catch (error) {
-                log.error(\\\`❌ Erreur envoi message reconnexion à \\\${session.userId}:\\\`, error);
+                log.error(`❌ Erreur envoi message reconnexion à ${session.userId}:`, error);
             }
 
             await this.createSession(session.userId, session.userData, session.connectionMethod);
             
         } catch (error) {
-            log.error(\\\`❌ Échec reconnexion \\\${sessionId}:\\\`, error);
+            log.error(`❌ Échec reconnexion ${sessionId}:`, error);
             
             try {
                 await this.sendMessage(
@@ -980,7 +980,7 @@ Support: \\\${config.bot.support_contact}
                     "❌ *Échec reconnexion automatique*\\n\\nUtilisez /connect pour vous reconnecter manuellement."
                 );
             } catch (error) {
-                log.error(\\\`❌ Erreur envoi message échec reconnexion à \\\${session.userId}:\\\`, error);
+                log.error(`❌ Erreur envoi message échec reconnexion à ${session.userId}:`, error);
             }
         }
     }
@@ -1000,7 +1000,7 @@ Support: \\\${config.bot.support_contact}
             
             this.sessions.delete(sessionId);
             
-            log.info(\\\`🔌 Session déconnectée manuellement: \\\${sessionId}\\\`);
+            log.info(`🔌 Session déconnectée manuellement: ${sessionId}`);
         } catch (error) {
             log.error('❌ Erreur déconnexion session:', error);
         }
@@ -1168,7 +1168,7 @@ Support: \\\${config.bot.support_contact}
                 const minutesInactive = (now - lastActivity) / (1000 * 60);
                 
                 if (session.is_trial && minutesInactive > 30) {
-                    log.info(\\\`🧹 Nettoyage session essai inactive: \\\${session.session_id}\\\`);
+                    log.info(`🧹 Nettoyage session essai inactive: ${session.session_id}`);
                     await this.disconnectSession(session.session_id);
                 }
                 
@@ -1197,7 +1197,7 @@ Support: \\\${config.bot.support_contact}
                 .select();
 
             if (data && data.length > 0) {
-                log.info(\\\`🧹 \\\${data.length} sessions essai expirées nettoyées\\\`);
+                log.info(`🧹 ${data.length} sessions essai expirées nettoyées`);
                 
                 for (const session of data) {
                     await this.disconnectSession(session.session_id);
@@ -1231,7 +1231,7 @@ Support: \\\${config.bot.support_contact}
                     .in('user_id', userIds)
                     .eq('status', 'connected');
 
-                log.info(\\\`✅ \\\${userIds.length} sessions payantes maintenues actives\\\`);
+                log.info(`✅ ${userIds.length} sessions payantes maintenues actives`);
             }
 
             const { data: expiredSubs, error: error2 } = await this.supabase
@@ -1254,7 +1254,7 @@ Support: \\\${config.bot.support_contact}
                     .eq('status', 'connected')
                     .eq('subscription_active', true);
 
-                log.warn(\\\`⚠️  \\\${expiredUserIds.length} sessions marquées comme abonnement expiré\\\`);
+                log.warn(`⚠️  ${expiredUserIds.length} sessions marquées comme abonnement expiré`);
             }
 
         } catch (error) {
@@ -1278,7 +1278,7 @@ Support: \\\${config.bot.support_contact}
             }
         }
         
-        log.info(\\\`💾 \\\${preservedSessions.length} sessions préservées pour mise à jour\\\`);
+        log.info(`💾 ${preservedSessions.length} sessions préservées pour mise à jour`);
         return preservedSessions;
     }
 

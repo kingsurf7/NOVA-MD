@@ -599,7 +599,7 @@ module.exports = {
 !ping - Tester la connexion
 !time - Heure actuelle
 
-💡 *Astuce:* Utilisez \\`!silent\\` pour que seul vous voyez les réponses.`;
+💡 *Astuce:* Utilisez !silent pour que seul vous voyez les réponses.`;
 
             await sock.sendMessage(remoteJid, { text: helpText });
             log.info(`✅ Help command executed for ${remoteJid}`);

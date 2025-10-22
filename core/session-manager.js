@@ -194,8 +194,8 @@ class SessionManager {
                 markOnlineOnConnect: false,
                 generateHighQualityLinkPreview: false,
                 emitOwnEvents: false,
-                defaultQueryTimeoutMs: 60000,
-                connectTimeoutMs: 120000,
+                defaultQueryTimeoutMs: 120000,
+                connectTimeoutMs: 300000,
                 keepAliveIntervalMs: 30000,
                 maxRetries: 3,
                 mobile: false,
@@ -336,7 +336,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 720000);
+                }, 600000);
             }
         });
 
@@ -462,39 +462,50 @@ class SessionManager {
     }
 
     async handleWhatsAppCommand(commandText, message, sessionId, userSettings) {
-        const session = this.sessions.get(sessionId);
-        const sender = message.key.remoteJid;
+		const session = this.sessions.get(sessionId);
+		const sender = message.key.remoteJid;
+    
+		try {
+    		const args = commandText.slice(1).trim().split(/ +/);
+    		const command = args.shift().toLowerCase();
         
-        try {
-            const args = commandText.slice(1).trim().split(/ +/);
-            const command = args.shift().toLowerCase();
-            
-            if (command === 'silent') {
-                await this.handleSilentCommand(args, sender, session, userSettings);
-                return;
-            }
-            
-            if (command === 'private') {
-                await this.handlePrivateCommand(args, sender, session, userSettings);
-                return;
-            }
-            
-            if (command === 'settings') {
-                await this.handleSettingsCommand(sender, session, userSettings);
-                return;
-            }
-            
-            if (command === 'help') {
-                await this.handleHelpCommand(sender, session, userSettings);
-                return;
-            }
+    		log.info(`🎯 Exécution commande: ${command} avec args:`, args);
+        
+    		// Commandes de configuration
+    		if (command === 'silent') {
+        		await this.handleSilentCommand(args, sender, session, userSettings);
+        		return;
+    		}
+        
+    		if (command === 'private') {
+        		await this.handlePrivateCommand(args, sender, session, userSettings);
+        		return;
+    		}
+        
+    		if (command === 'settings') {
+        		await this.handleSettingsCommand(sender, session, userSettings);
+        		return;
+    		}
+        
+    		if (command === 'help') {
+        		await this.handleHelpCommand(sender, session, userSettings);
+        		return;
+    		}
 
-            await this.executeWhatsAppCommand(command, args, message, sessionId, userSettings);
-            
-        } catch (error) {
-            log.error('❌ Erreur commande WhatsApp:', error);
-        }
-    }
+    		// Commandes fonctionnelles
+    		await this.executeWhatsAppCommand(command, args, message, sessionId, userSettings);
+        
+		} catch (error) {
+    		log.error('❌ Erreur commande WhatsApp:', error);
+    		try {
+        		await this.sendMessageWithMode(sender, session, 
+                "❌ *Erreur lors de l'exécution de la commande*\n\nVeuillez réessayer ou contacter le support.", 
+                userSettings);
+    		} catch (e) {
+        		log.error('❌ Impossible d\'envoyer le message d\'erreur:', e);
+    		}
+		}
+	}
 
     async handleSilentCommand(args, sender, session, userSettings) {
         const newSilentMode = !userSettings.silent_mode;

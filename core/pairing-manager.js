@@ -129,9 +129,32 @@ class PairingManager {
   }
 
   async startPairingWithPhone(userId, userData, phoneNumber) {
-    // CORRECTION: Utiliser le chemin absolu
+     
+    // NETTOYER COMPLÈTEMENT les sessions existantes
     const pairingAuthPath = path.join(process.cwd(), this.sessionName);
-    await fs.ensureDir(pairingAuthPath);
+    const sessionsPath = path.join(process.cwd(), 'sessions'); 
+    
+    try {
+        // Supprimer complètement les dossiers de session existants
+        if (await fs.pathExists(pairingAuthPath)) {
+            await fs.remove(pairingAuthPath);
+        }
+        
+        // Nettoyer les anciennes sessions pour cet utilisateur
+        if (await fs.pathExists(sessionsPath)) {
+            const sessionDirs = await fs.readdir(sessionsPath);
+            for (const dir of sessionDirs) {
+                if (dir.includes(userId.toString())) {
+                    await fs.remove(path.join(sessionsPath, dir));
+                }
+            }
+        }
+        
+        // Recréer le dossier d'authentification
+        await fs.ensureDir(pairingAuthPath);
+        } catch (cleanupError) {
+        log.warn(`⚠️ Erreur nettoyage sessions: ${cleanupError.message}`);
+    }
     
     const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
     
@@ -150,17 +173,19 @@ class PairingManager {
         maxRetries: 5,
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
-        fireInitQueries: false,
+        fireInitQueries: true,
         mobile: false,
         appStateMacVerification: {
-          patch: false,
-          snapshot: false
+          patch: true,
+          snapshot: true
         },
         transactionOpts: {
           maxCommitRetries: 3,
           delayBeforeRetry: 2000
         },
-        getMessage: async () => undefined
+        getMessage: async () => undefined, 
+        msgRetryCounterCache: new Map(),
+        messageResendCache: new Map() 
       });
 
       let pairingCodeSent = false;
@@ -286,6 +311,7 @@ class PairingManager {
           this.cleanupUserTimeouts(userId);
           pairingSuccess = true;
           log.success(`🎉 CONNEXION RÉUSSIE via pairing pour ${userId}`);
+          await delay(2000);
           await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
           
         } else if (connection === "close") {
@@ -485,7 +511,50 @@ class PairingManager {
         if (rl) rl.close();
     }
 }
-
+  
+async forceCleanupSessions(userId) {
+    try {
+        log.info(`🧹 Nettoyage forcé des sessions pour ${userId}`);
+        
+        const sessionsToClean = [
+            path.join(process.cwd(), this.sessionName),
+            path.join(process.cwd(), 'sessions', `pairing_${userId}_*`),
+            path.join(process.cwd(), 'sessions', `qr_${userId}_*`)
+        ];
+        
+        for (const sessionPath of sessionsToClean) {
+            try {
+                if (await fs.pathExists(sessionPath)) {
+                    await fs.remove(sessionPath);
+                    log.success(`✅ Session nettoyée: ${sessionPath}`);
+                }
+            } catch (error) {
+                log.warn(`⚠️ Impossible de nettoyer ${sessionPath}: ${error.message}`);
+            }
+        }
+        
+        // Nettoyer également les sessions actives
+        for (const [sessionId, sessionData] of this.sessionManager.sessions) {
+            if (sessionData.userId === userId) {
+                try {
+                    if (sessionData.socket) {
+                        await sessionData.socket.end();
+                    }
+                    this.sessionManager.sessions.delete(sessionId);
+                } catch (error) {
+                    log.warn(`⚠️ Erreur nettoyage session ${sessionId}: ${error.message}`);
+                }
+            }
+        }
+        
+        // Nettoyer les pairings actifs
+        this.cleanupPairing(userId);
+        
+    } catch (error) {
+        log.error(`❌ Erreur nettoyage forcé sessions: ${error.message}`);
+    }
+}
+  
 // AJOUTER cette méthode pour configurer complètement les événements du socket
 setupCompleteSocketEvents(socket, sessionId, userId) {
     const sessionManager = this.sessionManager;

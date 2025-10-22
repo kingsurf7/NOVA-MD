@@ -420,8 +420,8 @@ class PairingManager {
         // AJOUTER LA SESSION AU SESSION MANAGER
         this.sessionManager.sessions.set(sessionId, sessionData);
 
-        // CONFIGURER LES ÉVÉNEMENTS DU SOCKET
-        this.setupSessionSocketEvents(socket, sessionId, userId);
+        // CONFIGURER LES ÉVÉNEMENTS DU SOCKET COMPLÈTEMENT
+        this.setupCompleteSocketEvents(socket, sessionId, userId);
 
         await this.sessionManager.supabase
             .from('whatsapp_sessions')
@@ -443,20 +443,20 @@ class PairingManager {
         if (rl) rl.close();
 
         // Message de bienvenue sur WhatsApp
-        let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\\n\\n`;
-        whatsappMessage += `✅ Méthode: Code de Pairing\\n`;
-        whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id || 'Utilisateur'}\\n`;
+        let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
+        whatsappMessage += `✅ Méthode: Code de Pairing\n`;
+        whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id || 'Utilisateur'}\n`;
         
         if (isPayedUser) {
-            whatsappMessage += `📱 Statut: Session PERMANENTE\\n\\n`;
-            whatsappMessage += `💎 *ABONNEMENT ACTIF*\\n`;
-            whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\\n`;
-            whatsappMessage += `🔐 Session maintenue automatiquement\\n\\n`;
+            whatsappMessage += `📱 Statut: Session PERMANENTE\n\n`;
+            whatsappMessage += `💎 *ABONNEMENT ACTIF*\n`;
+            whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
+            whatsappMessage += `🔐 Session maintenue automatiquement\n\n`;
         } else {
-            whatsappMessage += `📱 Statut: Session d'essai\\n\\n`;
+            whatsappMessage += `📱 Statut: Session d'essai\n\n`;
         }
         
-        whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\\n`;
+        whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
         whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
 
         try {
@@ -473,8 +473,8 @@ class PairingManager {
 
         // Message sur Telegram
         await this.sendMessageViaHTTP(userId, 
-            `✅ *Connexion WhatsApp réussie via Pairing!*\\n\\n` +
-            `Votre session est maintenant active.\\n` +
+            `✅ *Connexion WhatsApp réussie via Pairing!*\n\n` +
+            `Votre session est maintenant active.\n` +
             `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
         );
 
@@ -486,35 +486,71 @@ class PairingManager {
     }
 }
 
-// AJOUTER cette méthode pour configurer les événements du socket
-setupSessionSocketEvents(socket, sessionId, userId) {
-    socket.ev.on("messages.upsert", async (m) => {
-        log.info(`📨 Message reçu pour ${userId}: ${m.messages?.length} messages`);
-        await this.sessionManager.handleIncomingMessage(m, sessionId);
-    });
-
-    socket.ev.on("messages.update", async (updates) => {
-        await this.sessionManager.updateSessionActivity(sessionId);
-    });
-
+// AJOUTER cette méthode pour configurer complètement les événements du socket
+setupCompleteSocketEvents(socket, sessionId, userId) {
+    const sessionManager = this.sessionManager;
+    
+    // Événement de mise à jour de connexion
     socket.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        if (connection === "open") {
+            log.success(`✅ Connexion WhatsApp maintenue pour ${userId}`);
+            await sessionManager.updateSessionStatus(sessionId, 'connected');
+        }
         
         if (connection === "close") {
             log.warn(`🔌 Connexion fermée pour ${userId}`);
-            await this.sessionManager.handleConnectionClose(sessionId, lastDisconnect);
+            await sessionManager.handleConnectionClose(sessionId, lastDisconnect);
         }
     });
 
+    // Événement de mise à jour des credentials
     socket.ev.on("creds.update", async (creds) => {
-        const session = this.sessionManager.sessions.get(sessionId);
+        const session = sessionManager.sessions.get(sessionId);
         if (session && session.saveCreds) {
             await session.saveCreds();
         }
-        await this.sessionManager.updateSessionActivity(sessionId);
+        await sessionManager.updateSessionActivity(sessionId);
     });
-          }
 
+    // Événement de réception de messages
+    socket.ev.on("messages.upsert", async (m) => {
+        log.info(`📨 Message reçu pour ${userId}: ${m.messages?.length} messages`);
+        await sessionManager.handleIncomingMessage(m, sessionId);
+    });
+
+    // Événement de mise à jour de messages
+    socket.ev.on("messages.update", async (updates) => {
+        await sessionManager.updateSessionActivity(sessionId);
+    });
+
+    // Événement de mise à jour des contacts
+    socket.ev.on("contacts.update", async (updates) => {
+        await sessionManager.updateSessionActivity(sessionId);
+    });
+
+    // Événement de mise à jour des groupes
+    socket.ev.on("groups.update", async (updates) => {
+        await sessionManager.updateSessionActivity(sessionId);
+    });
+
+    // Traitement des autres événements
+    socket.ev.process(async (events) => {
+        if (events['messaging-history.set']) {
+            log.info(`📚 Historique des messages chargé pour ${userId}`);
+        }
+        
+        if (events['chats.upsert']) {
+            await sessionManager.updateSessionActivity(sessionId);
+        }
+        
+        if (events['presence.update']) {
+            // Ignorer les mises à jour de présence
+        }
+    });
+  }
+  
   // ... (les autres méthodes restent inchangées)
 
   async handlePairingCode(socket, userId, userData, question, rl) {

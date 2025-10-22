@@ -386,10 +386,8 @@ class PairingManager {
         const sessionId = `pairing_${userId}_${Date.now()}`;
         const authDir = path.join(process.cwd(), 'sessions', sessionId);
         
-        // CRÉER le dossier de session
         await fs.ensureDir(authDir);
 
-        // COPIER les fichiers d'authentification depuis pairing-auth
         const pairingAuthPath = path.join(process.cwd(), this.sessionName);
         
         if (await fs.pathExists(pairingAuthPath)) {
@@ -400,15 +398,12 @@ class PairingManager {
                 await fs.copy(sourcePath, targetPath);
             }
             log.info(`✅ Fichiers d'authentification copiés vers ${authDir}`);
-        } else {
-            log.warn(`⚠️ Dossier pairing-auth non trouvé, création nouvelle session`);
-            // Sauvegarder les credentials manuellement
-            await saveCreds();
         }
 
         const access = await this.sessionManager.authManager.checkUserAccess(userId);
         const isPayedUser = access.hasAccess;
 
+        // CRÉATION COMPLÈTE DE LA SESSION
         const sessionData = {
             socket: socket,
             userId: userId,
@@ -422,9 +417,12 @@ class PairingManager {
             lastActivity: new Date()
         };
 
+        // AJOUTER LA SESSION AU SESSION MANAGER
         this.sessionManager.sessions.set(sessionId, sessionData);
 
-        // Sauvegarder dans la base de données
+        // CONFIGURER LES ÉVÉNEMENTS DU SOCKET
+        this.setupSessionSocketEvents(socket, sessionId, userId);
+
         await this.sessionManager.supabase
             .from('whatsapp_sessions')
             .insert([{
@@ -445,33 +443,38 @@ class PairingManager {
         if (rl) rl.close();
 
         // Message de bienvenue sur WhatsApp
-        let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
-        whatsappMessage += `✅ Méthode: Code de Pairing\n`;
-        whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id || 'Utilisateur'}\n`;
+        let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\\n\\n`;
+        whatsappMessage += `✅ Méthode: Code de Pairing\\n`;
+        whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id || 'Utilisateur'}\\n`;
         
         if (isPayedUser) {
-            whatsappMessage += `📱 Statut: Session PERMANENTE\n\n`;
-            whatsappMessage += `💎 *ABONNEMENT ACTIF*\n`;
-            whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
-            whatsappMessage += `🔐 Session maintenue automatiquement\n\n`;
+            whatsappMessage += `📱 Statut: Session PERMANENTE\\n\\n`;
+            whatsappMessage += `💎 *ABONNEMENT ACTIF*\\n`;
+            whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\\n`;
+            whatsappMessage += `🔐 Session maintenue automatiquement\\n\\n`;
         } else {
-            whatsappMessage += `📱 Statut: Session d'essai\n\n`;
+            whatsappMessage += `📱 Statut: Session d'essai\\n\\n`;
         }
         
-        whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
+        whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\\n`;
         whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
 
         try {
-            await socket.sendMessage(socket.user.id, { text: whatsappMessage });
-            log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
+            // ENVOYER le message sur WhatsApp
+            if (socket.user && socket.user.id) {
+                await socket.sendMessage(socket.user.id, { text: whatsappMessage });
+                log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
+            } else {
+                log.warn(`⚠️ Impossible d'envoyer le message WhatsApp: user.id non défini`);
+            }
         } catch (whatsappError) {
             log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
         }
 
         // Message sur Telegram
         await this.sendMessageViaHTTP(userId, 
-            `✅ *Connexion WhatsApp réussie via Pairing!*\n\n` +
-            `Votre session est maintenant active.\n` +
+            `✅ *Connexion WhatsApp réussie via Pairing!*\\n\\n` +
+            `Votre session est maintenant active.\\n` +
             `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
         );
 
@@ -481,7 +484,36 @@ class PairingManager {
         log.error('❌ Erreur gestion pairing réussi:', error);
         if (rl) rl.close();
     }
-  }
+}
+
+// AJOUTER cette méthode pour configurer les événements du socket
+setupSessionSocketEvents(socket, sessionId, userId) {
+    socket.ev.on("messages.upsert", async (m) => {
+        log.info(`📨 Message reçu pour ${userId}: ${m.messages?.length} messages`);
+        await this.sessionManager.handleIncomingMessage(m, sessionId);
+    });
+
+    socket.ev.on("messages.update", async (updates) => {
+        await this.sessionManager.updateSessionActivity(sessionId);
+    });
+
+    socket.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect } = update;
+        
+        if (connection === "close") {
+            log.warn(`🔌 Connexion fermée pour ${userId}`);
+            await this.sessionManager.handleConnectionClose(sessionId, lastDisconnect);
+        }
+    });
+
+    socket.ev.on("creds.update", async (creds) => {
+        const session = this.sessionManager.sessions.get(sessionId);
+        if (session && session.saveCreds) {
+            await session.saveCreds();
+        }
+        await this.sessionManager.updateSessionActivity(sessionId);
+    });
+          }
 
   // ... (les autres méthodes restent inchangées)
 

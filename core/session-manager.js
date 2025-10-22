@@ -401,17 +401,29 @@ class SessionManager {
         }
     }
 
-    async handleIncomingMessage(m, sessionId) {
-        const session = this.sessions.get(sessionId);
-        if (session && m.messages) {
-            await this.updateSessionActivity(sessionId);
-            
-            for (const message of m.messages) {
-                if (!message.key.fromMe) {
-                    await this.handleWhatsAppMessage(message, sessionId);
-                }
-            }
-        }
+    // Dans session-manager.js, ajoutez cette méthode
+
+	getSessionByUserId(userId) {
+		for (const [sessionId, sessionData] of this.sessions) {
+    		if (sessionData.userId === userId && sessionData.status === 'connected') {
+        		return { sessionId, ...sessionData };
+    		}
+		}
+		return null;
+	}
+
+	// Et modifiez la méthode handleIncomingMessage pour mieux gérer les sessions
+	async handleIncomingMessage(m, sessionId) {
+		const session = this.sessions.get(sessionId);
+		if (session && m.messages && session.status === 'connected') {
+    		await this.updateSessionActivity(sessionId);
+        
+    		for (const message of m.messages) {
+        		if (!message.key.fromMe && message.message) {
+            		await this.handleWhatsAppMessage(message, sessionId);
+        		}
+    		}
+		}
     }
 
     async handleWhatsAppMessage(message, sessionId) {

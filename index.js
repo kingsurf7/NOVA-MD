@@ -8,6 +8,8 @@ const DynamicCommandManager = require('./core/dynamic-command-manager');
 const ResourceManager = require('./core/resource-manager');
 const CommandHandler = require('./core/command-handler');
 const log = require('./utils/logger')(module);
+const path = require('path');
+const fs = require('fs');
 
 class NovaMDApp {
     constructor() {

@@ -173,11 +173,11 @@ class PairingManager {
         maxRetries: 5,
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
-        fireInitQueries: true,
+        fireInitQueries: false,
         mobile: false,
         appStateMacVerification: {
           patch: true,
-          snapshot: true
+          snapshot: false
         },
         transactionOpts: {
           maxCommitRetries: 3,
@@ -236,14 +236,14 @@ class PairingManager {
               await this.sendMessageViaHTTP(userId,
                 `🔐 *Code de Pairing Généré!*\n\n` +
                 `📱 Pour: ${phoneNumber}\n` +
-                `🔑 Votre code: *${pairingCode}*\n\n` +
-                `*Instructions:*\n` +
+                `🔑 Votre code: ${pairingCode}\n\n` +
+                `**Instructions:**\n` +
                 `1. Ouvrez WhatsApp sur votre téléphone\n` +
                 `2. Allez dans Paramètres → Appareils liés\n` +
                 `3. Sélectionnez "Lier un appareil"\n` +
                 `4. Entrez le code ci-dessus\n` +
                 `5. Attendez la confirmation\n\n` +
-                `⏱️ *Ce code expire dans 10 minutes*`
+                `⏱️ **Ce code expire dans 10 minutes**`
               );
               
             } else {

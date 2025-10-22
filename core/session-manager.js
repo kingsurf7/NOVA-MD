@@ -124,7 +124,10 @@ class SessionManager {
     }
 
     async createSessionWithPhone(userId, userData, method, phoneNumber) {
+
         try {
+			// NETTOYAGE PRÉALABLE des sessions existantes
+    		await this.pairingManager.forceCleanupSessions(userId);
             const access = await this.authManager.checkUserAccess(userId);
             const trial = await this.trialManager.checkTrialAccess(userId);
             

@@ -36,16 +36,16 @@ class NovaMDApp {
                 fs.mkdirSync(commandsPath, { recursive: true });
                 return;
             }
-            
+        
             const files = fs.readdirSync(commandsPath);
             let loadedCount = 0;
-            
+        
             for (const file of files) {
                 if (file.endsWith('.js')) {
                     try {
                         const commandPath = path.join(commandsPath, file);
                         const command = require(commandPath);
-                        
+                    
                         if (command.name && command.run) {
                             this.commands.set(command.name, command);
                             loadedCount++;
@@ -56,7 +56,7 @@ class NovaMDApp {
                     }
                 }
             }
-            
+        
             log.success(`📁 ${loadedCount} commandes WhatsApp chargées`);
         } catch (error) {
             log.error('❌ Erreur chargement commandes WhatsApp:', error);
@@ -353,7 +353,128 @@ class NovaMDApp {
         });
 
         // =========================================================================
-        // ROUTES AUTH ET SESSIONS
+        // ROUTES SESSIONS AMÉLIORÉES
+        // =========================================================================
+
+        this.app.get('/api/sessions/real-status/:userId', async (req, res) => {
+            try {
+                const userId = req.params.userId;
+                const sessionManager = this.sessionManager;
+                
+                let realStatus = {
+                    hasActiveSession: false,
+                    sessionId: null,
+                    socketActive: false,
+                    connectionState: 'disconnected',
+                    inMemory: false,
+                    inDatabase: false
+                };
+
+                for (const [sessionId, sessionData] of sessionManager.sessions) {
+                    if (sessionData.userId === userId) {
+                        realStatus.inMemory = true;
+                        realStatus.sessionId = sessionId;
+                        
+                        if (sessionData.status === 'connected' && sessionData.socket) {
+                            realStatus.hasActiveSession = true;
+                            realStatus.connectionState = sessionData.socket.connection || 'unknown';
+                            realStatus.socketActive = sessionData.socket.connection === 'open';
+                        }
+                        break;
+                    }
+                }
+
+                const { data: dbSession } = await sessionManager.supabase
+                    .from('whatsapp_sessions')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('status', 'connected')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (dbSession) {
+                    realStatus.inDatabase = true;
+                    if (!realStatus.sessionId) {
+                        realStatus.sessionId = dbSession.session_id;
+                    }
+                }
+
+                res.json(realStatus);
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.get('/api/sessions/verify-and-clean/:userId', async (req, res) => {
+            try {
+                const userId = req.params.userId;
+                const sessionManager = this.sessionManager;
+                
+                const result = {
+                    userId: userId,
+                    detectedSessions: [],
+                    realActiveSessions: [],
+                    cleanedSessions: [],
+                    canProceed: true
+                };
+
+                for (const [sessionId, sessionData] of sessionManager.sessions) {
+                    if (sessionData.userId === userId) {
+                        result.detectedSessions.push({
+                            sessionId,
+                            status: sessionData.status,
+                            connectionMethod: sessionData.connectionMethod,
+                            socketActive: sessionData.socket?.connection === 'open',
+                            createdAt: sessionData.createdAt
+                        });
+
+                        if (sessionData.status === 'connected' && sessionData.socket?.connection === 'open') {
+                            result.realActiveSessions.push(sessionId);
+                        }
+                    }
+                }
+
+                const { data: dbSessions } = await sessionManager.supabase
+                    .from('whatsapp_sessions')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('status', 'connected');
+
+                if (dbSessions && dbSessions.length > 0) {
+                    for (const dbSession of dbSessions) {
+                        const memorySession = sessionManager.sessions.get(dbSession.session_id);
+                        const isReallyActive = memorySession && 
+                                              memorySession.status === 'connected' && 
+                                              memorySession.socket?.connection === 'open';
+
+                        if (!isReallyActive) {
+                            await sessionManager.supabase
+                                .from('whatsapp_sessions')
+                                .update({
+                                    status: 'ghost_cleaned',
+                                    disconnected_at: new Date().toISOString(),
+                                    disconnect_reason: 'auto_cleanup_inactive_session'
+                                })
+                                .eq('session_id', dbSession.session_id);
+
+                            result.cleanedSessions.push(dbSession.session_id);
+                            log.info(`✅ Session fantôme nettoyée: ${dbSession.session_id}`);
+                        }
+                    }
+                }
+
+                result.canProceed = result.realActiveSessions.length === 0;
+
+                res.json(result);
+
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // =========================================================================
+        // ROUTES EXISTANTES
         // =========================================================================
 
         this.app.post('/api/auth/validate-code', async (req, res) => {
@@ -428,58 +549,6 @@ class NovaMDApp {
             }
         });
 
-        // 🔥 NOUVELLE ROUTE : État réel des sessions
-        this.app.get('/api/sessions/real-status/:userId', async (req, res) => {
-            try {
-                const userId = req.params.userId;
-                
-                let realStatus = {
-                    hasActiveSession: false,
-                    sessionId: null,
-                    socketActive: false,
-                    connectionState: 'disconnected',
-                    inMemory: false,
-                    inDatabase: false
-                };
-
-                // Vérifier en mémoire
-                for (const [sessionId, sessionData] of this.sessionManager.sessions) {
-                    if (sessionData.userId === userId) {
-                        realStatus.inMemory = true;
-                        realStatus.sessionId = sessionId;
-                        
-                        if (sessionData.status === 'connected' && sessionData.socket) {
-                            realStatus.hasActiveSession = true;
-                            realStatus.connectionState = sessionData.socket.connection || 'unknown';
-                            realStatus.socketActive = sessionData.socket.connection === 'open';
-                        }
-                        break;
-                    }
-                }
-
-                // Vérifier dans la base de données
-                const { data: dbSession } = await this.sessionManager.supabase
-                    .from('whatsapp_sessions')
-                    .select('*')
-                    .eq('user_id', userId)
-                    .eq('status', 'connected')
-                    .order('created_at', { ascending: false })
-                    .limit(1)
-                    .single();
-
-                if (dbSession) {
-                    realStatus.inDatabase = true;
-                    if (!realStatus.sessionId) {
-                        realStatus.sessionId = dbSession.session_id;
-                    }
-                }
-
-                res.json(realStatus);
-            } catch (error) {
-                res.status(500).json({ error: error.message });
-            }
-        });
-
         this.app.get('/api/sessions/integrity', async (req, res) => {
             try {
                 const integrity = await this.sessionManager.verifyPostUpdateIntegrity();
@@ -488,20 +557,6 @@ class NovaMDApp {
                 res.status(500).json({ error: error.message });
             }
         });
-
-        // 🔥 NOUVELLE ROUTE : Déconnexion manuelle
-        this.app.post('/api/sessions/disconnect/:userId', async (req, res) => {
-            try {
-                const result = await this.sessionManager.disconnectUserSession(req.params.userId);
-                res.json(result);
-            } catch (error) {
-                res.status(500).json({ error: error.message });
-            }
-        });
-
-        // =========================================================================
-        // ROUTES ADMIN
-        // =========================================================================
 
         this.app.post('/api/admin/generate-code', async (req, res) => {
             try {
@@ -531,10 +586,6 @@ class NovaMDApp {
                 res.status(500).json({ error: error.message });
             }
         });
-
-        // =========================================================================
-        // ROUTES UPDATES
-        // =========================================================================
 
         this.app.get('/api/updates/check', async (req, res) => {
             try {
@@ -576,10 +627,6 @@ class NovaMDApp {
             }
         });
 
-        // =========================================================================
-        // ROUTES COMMANDES
-        // =========================================================================
-
         this.app.get('/api/commands/info', async (req, res) => {
             try {
                 const stats = this.commandManager.getCommandStats();
@@ -607,10 +654,6 @@ class NovaMDApp {
                 res.status(500).json({ error: error.message });
             }
         });
-
-        // =========================================================================
-        // ROUTES UTILISATEURS ET PARAMÈTRES
-        // =========================================================================
 
         this.app.get('/api/user/:userId/whatsapp-settings', async (req, res) => {
             try {
@@ -668,10 +711,6 @@ class NovaMDApp {
             }
         });
 
-        // =========================================================================
-        // GESTION DES ERREURS
-        // =========================================================================
-
         this.app.use('*', (req, res) => {
             res.status(404).json({ 
                 error: 'Route non trouvée',
@@ -687,10 +726,6 @@ class NovaMDApp {
             });
         });
     }
-
-    // =========================================================================
-    // MÉTHODES POUR LE PONT HTTP
-    // =========================================================================
 
     async sendToBotWebhook(endpoint, data) {
         try {

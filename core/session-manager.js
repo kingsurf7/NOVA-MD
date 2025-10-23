@@ -95,7 +95,7 @@ class SessionManager {
             
             if (hasAccess && !isTrial) {
                 const existingSession = await this.getRealActiveSession(userId);
-                if (existingSession && existingSession.socketActive) {
+                if (existingSession && existingSession.status === 'connected') {
                     log.info(`🔄 Session existante réutilisée pour ${userId} (${isTrial ? 'Essai' : 'Payant'})`);
                     await this.updateSessionActivity(existingSession.sessionId);
                     
@@ -125,6 +125,35 @@ class SessionManager {
 
     async createSessionWithPhone(userId, userData, method, phoneNumber) {
         try {
+            // 🔥 D'ABORD vérifier et corriger les sessions fantômes
+            const activeSession = await this.getRealActiveSession(userId);
+            
+            if (activeSession) {
+                // VÉRIFIER si c'est une session RÉELLE ou une correction vient d'être faite
+                if (activeSession.socketActive) {
+                    log.warn(`🚫 Session RÉELLEMENT active pour ${userId} - pairing refusé`);
+                    
+                    await this.sendMessage(userId,
+                        `🚫 *Session déjà active!*\n\n` +
+                        `Vous avez une session WhatsApp connectée.\n\n` +
+                        `📱 *Session active:*\n` +
+                        `• Méthode: ${activeSession.connectionMethod || 'Inconnue'}\n` +
+                        `• Statut: ${activeSession.subscriptionActive ? '💎 Permanent' : '⚠️ Essai'}\n` +
+                        `• Créée: ${this.formatSessionTime(activeSession.createdAt)}\n\n` +
+                        `🔧 *Que faire?*\n` +
+                        `• Utilisez /disconnect pour déconnecter d'abord\n` +
+                        `• Puis réessayez /connect`
+                    );
+                    
+                    return { 
+                        success: false, 
+                        error: 'REAL_SESSION_ACTIVE',
+                        existingSession: activeSession 
+                    };
+                }
+            }
+
+            // Si AUCUNE session active (ou session fantôme corrigée), continuer
             const access = await this.authManager.checkUserAccess(userId);
             const trial = await this.trialManager.checkTrialAccess(userId);
             
@@ -137,40 +166,12 @@ class SessionManager {
                 }
             }
 
-            // 🔥 VÉRIFICATION RÉELLE des sessions actives
-            const activeSession = await this.getRealActiveSession(userId);
-            
-            if (activeSession) {
-                log.warn(`🚫 Session déjà active pour ${userId} - pairing refusé`);
-                
-                // INFORMER l'utilisateur de la session existante
-                await this.sendMessage(userId,
-                    `🚫 *Session déjà active!*\n\n` +
-                    `Vous avez déjà une session WhatsApp connectée.\n\n` +
-                    `📱 *Session active:*\n` +
-                    `• Méthode: ${activeSession.connectionMethod || 'Inconnue'}\n` +
-                    `• Statut: ${activeSession.subscriptionActive ? '💎 Permanent' : '⚠️ Essai'}\n` +
-                    `• Créée: ${this.formatSessionTime(activeSession.createdAt)}\n\n` +
-                    `🔧 *Que faire?*\n` +
-                    `• Attendez que WhatsApp se reconnecte automatiquement\n` +
-                    `• Ou utilisez /disconnect pour déconnecter d'abord\n` +
-                    `• Puis réessayez /connect`
-                );
-                
-                return { 
-                    success: false, 
-                    error: 'SESSION_ALREADY_ACTIVE',
-                    existingSession: activeSession 
-                };
-            }
-
-            // Si aucune session active, continuer avec le pairing
             if (method === 'pairing' && phoneNumber) {
-                log.info(`🔐 Tentative de connexion pairing pour ${userId} avec ${phoneNumber}`);
+                log.info(`🔐 Début pairing après correction sessions pour ${userId}`);
                 
                 const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
                 if (!cleanNumber || cleanNumber.length < 8 || cleanNumber.length > 15) {
-                    throw new Error(`Numéro invalide: ${cleanNumber.length} chiffres (attendu: 8-15 chiffres)`);
+                    throw new Error(`Numéro invalide: ${cleanNumber.length} chiffres`);
                 }
                 
                 const result = await this.pairingManager.initializePairing(userId, userData, cleanNumber);
@@ -191,103 +192,12 @@ class SessionManager {
                 `❌ *Échec de la connexion pairing*\n\n` +
                 `Erreur: ${error.message}\n\n` +
                 `Vous pouvez:\n` +
-                `• Vérifier votre numéro et réessayer\n` +
-                `• Utiliser la méthode QR Code\n` +
-                `• Contacter le support si le problème persiste`
+                `• Utiliser /disconnect pour nettoyer les sessions\n` +
+                `• Puis réessayer /connect\n` +
+                `• Ou utiliser la méthode QR Code`
             );
             
             throw error;
-        }
-    }
-
-    // 🔥 NOUVELLE méthode pour vérifier les sessions RÉELLEMENT actives
-    async getRealActiveSession(userId) {
-        try {
-            // 1. Vérifier en mémoire (sessions vraiment connectées)
-            for (const [sessionId, sessionData] of this.sessions) {
-                if (sessionData.userId === userId && sessionData.status === 'connected') {
-                    // VÉRIFIER que la socket est vraiment active
-                    try {
-                        if (sessionData.socket && sessionData.socket.connection === 'open') {
-                            log.info(`✅ Session réellement active trouvée pour ${userId}`);
-                            return {
-                                sessionId,
-                                userId: sessionData.userId,
-                                status: sessionData.status,
-                                subscriptionActive: sessionData.subscriptionActive,
-                                connectionMethod: sessionData.connectionMethod,
-                                createdAt: sessionData.createdAt,
-                                socketActive: true
-                            };
-                        }
-                    } catch (socketError) {
-                        log.warn(`⚠️ Socket inactive pour ${sessionId}: ${socketError.message}`);
-                        // Continuer à chercher
-                    }
-                }
-            }
-
-            // 2. Vérifier dans Supabase
-            const { data: dbSession } = await this.supabase
-                .from('whatsapp_sessions')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('status', 'connected')
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .single();
-
-            if (dbSession) {
-                log.warn(`⚠️ Session marquée active dans Supabase mais pas en mémoire: ${dbSession.session_id}`);
-                
-                // Vérifier si la session existe en mémoire avec un statut différent
-                const memorySession = this.sessions.get(dbSession.session_id);
-                if (memorySession && memorySession.status !== 'connected') {
-                    // Corriger l'incohérence
-                    await this.supabase
-                        .from('whatsapp_sessions')
-                        .update({ 
-                            status: memorySession.status,
-                            disconnected_at: new Date().toISOString()
-                        })
-                        .eq('session_id', dbSession.session_id);
-                    
-                    return null;
-                }
-                
-                return {
-                    sessionId: dbSession.session_id,
-                    userId: dbSession.user_id,
-                    status: dbSession.status,
-                    subscriptionActive: dbSession.subscription_active,
-                    connectionMethod: dbSession.connection_method,
-                    createdAt: new Date(dbSession.created_at),
-                    socketActive: false,
-                    fromDatabase: true
-                };
-            }
-
-            return null;
-        } catch (error) {
-            log.error('❌ Erreur vérification session active:', error);
-            return null;
-        }
-    }
-
-    // Méthode utilitaire pour formater le temps
-    formatSessionTime(createdAt) {
-        const now = new Date();
-        const created = new Date(createdAt);
-        const diffHours = Math.round((now - created) / (1000 * 60 * 60));
-        
-        if (diffHours < 1) {
-            const diffMinutes = Math.round((now - created) / (1000 * 60));
-            return `il y a ${diffMinutes} minute${diffMinutes > 1 ? 's' : ''}`;
-        } else if (diffHours < 24) {
-            return `il y a ${diffHours} heure${diffHours > 1 ? 's' : ''}`;
-        } else {
-            const diffDays = Math.round(diffHours / 24);
-            return `il y a ${diffDays} jour${diffDays > 1 ? 's' : ''}`;
         }
     }
 
@@ -516,15 +426,6 @@ class SessionManager {
         } catch (error) {
             log.error('❌ Erreur connexion réussie:', error);
         }
-    }
-
-    getSessionByUserId(userId) {
-        for (const [sessionId, sessionData] of this.sessions) {
-            if (sessionData.userId === userId && sessionData.status === 'connected') {
-                return { sessionId, ...sessionData };
-            }
-        }
-        return null;
     }
 
     async handleIncomingMessage(m, sessionId) {
@@ -1000,49 +901,6 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         }
     }
 
-    // 🔥 NOUVELLE méthode pour déconnecter un utilisateur
-    async disconnectUserSession(userId) {
-        try {
-            log.info(`🔌 Déconnexion manuelle pour ${userId}`);
-            
-            let disconnectedCount = 0;
-            
-            // Déconnecter toutes les sessions de cet utilisateur
-            for (const [sessionId, sessionData] of this.sessions) {
-                if (sessionData.userId === userId) {
-                    try {
-                        await this.disconnectSession(sessionId);
-                        disconnectedCount++;
-                        log.success(`✅ Session déconnectée: ${sessionId}`);
-                    } catch (error) {
-                        log.error(`❌ Erreur déconnexion ${sessionId}:`, error);
-                    }
-                }
-            }
-            
-            // Mettre à jour Supabase
-            await this.supabase
-                .from('whatsapp_sessions')
-                .update({
-                    status: 'manually_disconnected',
-                    disconnected_at: new Date().toISOString(),
-                    disconnect_reason: 'user_request'
-                })
-                .eq('user_id', userId)
-                .eq('status', 'connected');
-            
-            return { 
-                success: true, 
-                disconnectedCount: disconnectedCount,
-                message: `${disconnectedCount} session(s) déconnectée(s)`
-            };
-            
-        } catch (error) {
-            log.error('❌ Erreur déconnexion utilisateur:', error);
-            return { success: false, error: error.message };
-        }
-    }
-
     async getUserSession(userId) {
         try {
             const { data, error } = await this.supabase
@@ -1056,6 +914,103 @@ Fuseau: UTC+1 (Afrique/Douala)`;
 
             return data;
         } catch (error) {
+            return null;
+        }
+    }
+
+    // 🔥 NOUVELLE MÉTHODE AMÉLIORÉE
+    async getRealActiveSession(userId) {
+        try {
+            const realSessions = [];
+
+            // 1. Vérifier les sessions en mémoire (RÉELLEMENT actives)
+            for (const [sessionId, sessionData] of this.sessions) {
+                if (sessionData.userId === userId && sessionData.status === 'connected') {
+                    // VÉRIFICATION RÉELLE de la socket
+                    let socketActive = false;
+                    try {
+                        if (sessionData.socket && sessionData.socket.connection === 'open') {
+                            socketActive = true;
+                            realSessions.push({
+                                sessionId,
+                                userId: sessionData.userId,
+                                status: sessionData.status,
+                                subscriptionActive: sessionData.subscriptionActive,
+                                connectionMethod: sessionData.connectionMethod,
+                                createdAt: sessionData.createdAt,
+                                socketActive: true,
+                                source: 'memory'
+                            });
+                        }
+                    } catch (error) {
+                        log.warn(`⚠️ Socket invalide pour ${sessionId}: ${error.message}`);
+                    }
+                }
+            }
+
+            // 2. Vérifier Supabase et corriger les incohérences
+            const { data: dbSessions } = await this.supabase
+                .from('whatsapp_sessions')
+                .select('*')
+                .eq('user_id', userId)
+                .eq('status', 'connected')
+                .order('created_at', { ascending: false });
+
+            if (dbSessions && dbSessions.length > 0) {
+                for (const dbSession of dbSessions) {
+                    const memorySession = this.sessions.get(dbSession.session_id);
+                    const isReallyActive = memorySession && 
+                                          memorySession.status === 'connected' && 
+                                          memorySession.socket?.connection === 'open';
+
+                    if (!isReallyActive) {
+                        // 🔥 CORRECTION AUTOMATIQUE : Session fantôme détectée
+                        log.warn(`👻 Session fantôme détectée: ${dbSession.session_id} - Correction automatique`);
+                        
+                        await this.supabase
+                            .from('whatsapp_sessions')
+                            .update({
+                                status: 'ghost_cleaned',
+                                disconnected_at: new Date().toISOString(),
+                                disconnect_reason: 'auto_correction_no_memory_session'
+                            })
+                            .eq('session_id', dbSession.session_id);
+
+                        log.success(`✅ Session fantôme corrigée: ${dbSession.session_id}`);
+                        continue; // Ne pas retourner cette session
+                    }
+
+                    // Si elle est vraiment active, l'ajouter
+                    if (isReallyActive) {
+                        realSessions.push({
+                            sessionId: dbSession.session_id,
+                            userId: dbSession.user_id,
+                            status: dbSession.status,
+                            subscriptionActive: dbSession.subscription_active,
+                            connectionMethod: dbSession.connection_method,
+                            createdAt: new Date(dbSession.created_at),
+                            socketActive: true,
+                            source: 'database'
+                        });
+                    }
+                }
+            }
+
+            // Retourner la session la plus récente (s'il y en a)
+            if (realSessions.length > 0) {
+                const mostRecent = realSessions.sort((a, b) => 
+                    new Date(b.createdAt) - new Date(a.createdAt)
+                )[0];
+                
+                log.info(`✅ Session réellement active trouvée: ${mostRecent.sessionId}`);
+                return mostRecent;
+            }
+
+            log.info(`✅ Aucune session réellement active pour ${userId}`);
+            return null;
+
+        } catch (error) {
+            log.error('❌ Erreur vérification session active:', error);
             return null;
         }
     }
@@ -1364,6 +1319,76 @@ Fuseau: UTC+1 (Afrique/Douala)`;
         } catch (error) {
             return { healthy: false, reason: 'Erreur vérification santé' };
         }
+    }
+
+    // 🔥 NOUVELLE MÉTHODE POUR DÉCONNEXION UTILISATEUR
+    async disconnectUserSession(userId) {
+        try {
+            log.info(`🔌 Déconnexion manuelle pour ${userId}`);
+            
+            let disconnectedCount = 0;
+            
+            // Déconnecter toutes les sessions de cet utilisateur
+            for (const [sessionId, sessionData] of this.sessions) {
+                if (sessionData.userId === userId) {
+                    try {
+                        await this.disconnectSession(sessionId);
+                        disconnectedCount++;
+                        log.success(`✅ Session déconnectée: ${sessionId}`);
+                    } catch (error) {
+                        log.error(`❌ Erreur déconnexion ${sessionId}:`, error);
+                    }
+                }
+            }
+            
+            // Mettre à jour Supabase
+            await this.supabase
+                .from('whatsapp_sessions')
+                .update({
+                    status: 'manually_disconnected',
+                    disconnected_at: new Date().toISOString(),
+                    disconnect_reason: 'user_request'
+                })
+                .eq('user_id', userId)
+                .eq('status', 'connected');
+            
+            return { 
+                success: true, 
+                disconnectedCount: disconnectedCount,
+                message: `${disconnectedCount} session(s) déconnectée(s)`
+            };
+            
+        } catch (error) {
+            log.error('❌ Erreur déconnexion utilisateur:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    // 🔥 MÉTHODE UTILITAIRE POUR FORMATER LE TEMPS
+    formatSessionTime(createdAt) {
+        const now = new Date();
+        const created = new Date(createdAt);
+        const diffHours = Math.round((now - created) / (1000 * 60 * 60));
+        
+        if (diffHours < 1) {
+            const diffMinutes = Math.round((now - created) / (1000 * 60));
+            return `il y a ${diffMinutes} minute${diffMinutes > 1 ? 's' : ''}`;
+        } else if (diffHours < 24) {
+            return `il y a ${diffHours} heure${diffHours > 1 ? 's' : ''}`;
+        } else {
+            const diffDays = Math.round(diffHours / 24);
+            return `il y a ${diffDays} jour${diffDays > 1 ? 's' : ''}`;
+        }
+    }
+
+    // 🔥 MÉTHODE POUR RÉCUPÉRER LA SESSION PAR USER ID
+    getSessionByUserId(userId) {
+        for (const [sessionId, sessionData] of this.sessions) {
+            if (sessionData.userId === userId && sessionData.status === 'connected') {
+                return { sessionId, ...sessionData };
+            }
+        }
+        return null;
     }
 }
 

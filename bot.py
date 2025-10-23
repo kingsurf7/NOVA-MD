@@ -352,8 +352,33 @@ Important:
         
         context.user_data['waiting_for_code'] = True
 
-    async def send_qr_code(self, chat_id, qr_data, session_id):
-        """Envoyer le QR code à l'utilisateur"""
+    async def send_direct_message(self, user_id, message):
+        """Envoyer un message directement via Telegram"""
+        try:
+            # Échapper les caractères spéciaux Markdown
+            escaped_message = self.escape_markdown(message)
+            await self.application.bot.send_message(
+                chat_id=user_id,
+                text=escaped_message,
+                parse_mode='MarkdownV2'
+            )
+            logger.info(f"✅ Message envoyé à {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Erreur envoi message à {user_id}: {e}")
+            try:
+                await self.application.bot.send_message(
+                    chat_id=user_id,
+                    text=message  # Sans parse_mode
+                )
+                logger.info(f"✅ Message envoyé (sans Markdown) à {user_id}")
+                return True
+            except Exception as fallback_error:
+                logger.error(f"❌ Erreur fallback message à {user_id}: {fallback_error}")
+                return False
+
+    async def send_qr_code(self, user_id, qr_code, session_id):
+        """Envoyer un QR code via Telegram"""
         try:
             # Générer l'image QR code
             qr = qrcode.QRCode(
@@ -362,7 +387,7 @@ Important:
                 box_size=10,
                 border=4,
             )
-            qr.add_data(qr_data)
+            qr.add_data(qr_code)
             qr.make(fit=True)
 
             img = qr.make_image(fill_color="black", back_color="white")
@@ -389,19 +414,19 @@ Votre session restera active automatiquement
 
             # Envoyer d'abord les instructions
             await self.application.bot.send_message(
-                chat_id=chat_id,
+                chat_id=user_id,
                 text=instructions,
                 parse_mode='MarkdownV2'
             )
 
             # Ensuite envoyer l'image QR code
             await self.application.bot.send_photo(
-                chat_id=chat_id,
+                chat_id=user_id,
                 photo=img_buffer,
                 caption="Scannez ce QR code avec WhatsApp 📲"
             )
         
-            logger.info(f"✅ QR Code envoyé à {chat_id} - Session: {session_id}")
+            logger.info(f"✅ QR Code envoyé à {user_id} - Session: {session_id}")
             return True
         
         except Exception as e:
@@ -409,8 +434,8 @@ Votre session restera active automatiquement
             # Fallback: envoyer le texte du QR code
             try:
                 await self.application.bot.send_message(
-                    chat_id=chat_id,
-                    text=self.escape_markdown(f"❌ Impossible de générer l'image QR\n\nCode texte: `{qr_data}`\n\nCopiez ce code manuellement dans WhatsApp"),
+                    chat_id=user_id,
+                    text=self.escape_markdown(f"❌ Impossible de générer l'image QR\n\nCode texte: `{qr_code}`\n\nCopiez ce code manuellement dans WhatsApp"),
                     parse_mode='MarkdownV2'
                 )
                 return True
@@ -418,14 +443,16 @@ Votre session restera active automatiquement
                 logger.error(f"❌ Erreur fallback QR code: {fallback_error}")
                 return False
 
-    async def send_pairing_code(self, chat_id, code, phone_number):
-        """Envoyer le code de pairing à l'utilisateur"""
+    async def send_pairing_code(self, user_id, pairing_code, phone_number):
+        """Envoyer un code de pairing via Telegram"""
         try:
             pairing_text = self.escape_markdown(f"""
 🔐 Connexion par Code de Pairing
 
+📱Numéro whatsapp:
+*{phone_number}*
 📱 Votre code de pairing:
-`{code}`
+*{pairing_code}*
 
 Instructions:
 1. Ouvrez WhatsApp sur votre téléphone
@@ -440,11 +467,11 @@ La connexion se fera automatiquement!
             """)
         
             await self.application.bot.send_message(
-                chat_id=chat_id,
+                chat_id=user_id,
                 text=pairing_text,
                 parse_mode='MarkdownV2'
             )
-            logger.info(f"✅ Code de pairing envoyé à {chat_id}: {code}")
+            logger.info(f"✅ Code de pairing envoyé à {user_id}: {pairing_code}")
             return True
         
         except Exception as e:
@@ -561,15 +588,16 @@ Veuillez entrer votre numéro de téléphone WhatsApp:
     async def start_trial_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         user = update.effective_user
+        
         try:
-    		async with aiohttp.ClientSession() as session:
-        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
-            		if response.status == 200:
-                		real_status = await response.json()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+                    if response.status == 200:
+                        real_status = await response.json()
                     
-                		if real_status.get('hasActiveSession'):
-                    		await update.message.reply_text(
-                            self.escape_markdown("""
+                        if real_status.get('hasActiveSession'):
+                            await update.message.reply_text(
+                                self.escape_markdown("""
 🚫 *Session déjà active!*
 
 Vous avez déjà une session WhatsApp connectée.
@@ -577,16 +605,16 @@ Vous avez déjà une session WhatsApp connectée.
 Impossible de démarrer un essai avec une session active.
 
 Utilisez /disconnect pour déconnecter d'abord, puis réessayez.
-                            """),
-                            parse_mode='MarkdownV2',
-                            reply_markup=self.get_main_keyboard()
-                        )
-                    		return
-		except Exception as e:
-        logger.warning(f"⚠️ Impossible de vérifier les sessions pour l'essai: {e}")
-        # Continuer malgré l'erreur
+                                """),
+                                parse_mode='MarkdownV2',
+                                reply_markup=self.get_main_keyboard()
+                            )
+                            return
+        except Exception as e:
+            logger.warning(f"⚠️ Impossible de vérifier les sessions pour l'essai: {e}")
+            # Continuer malgré l'erreur
     
-		# Si aucune session active, continuer avec l'essai
+        # Si aucune session active, continuer avec l'essai
         await update.message.reply_text(
             self.escape_markdown("🎯 Démarrage de votre essai gratuit 24h!\n\nCréation de votre session WhatsApp..."),
             parse_mode='MarkdownV2'
@@ -645,15 +673,15 @@ Choisissez la méthode de connexion:
 
         # VÉRIFICATION SUPPLÉMENTAIRE : contacter le serveur Node.js pour l'état réel
         try:
-    		async with aiohttp.ClientSession() as session:
-        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
-            		if response.status == 200:
-                		real_session_data = await response.json()
-                		if real_session_data and real_session_data.get('hasActiveSession'):
-                    		# 🔥 NOUVEAU : Message clair avec options
-                    		session_days = await self.get_session_days(real_session_data.get('created_at'))
-                    		await update.message.reply_text(
-                        		self.escape_markdown(f"""
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+                    if response.status == 200:
+                        real_session_data = await response.json()
+                        if real_session_data and real_session_data.get('hasActiveSession'):
+                            # 🔥 NOUVEAU : Message clair avec options
+                            session_days = await self.get_session_days(real_session_data.get('created_at'))
+                            await update.message.reply_text(
+                                self.escape_markdown(f"""
 🚫 *Session déjà active!*
 
 Vous avez déjà une session WhatsApp connectée.
@@ -669,18 +697,18 @@ Vous avez déjà une session WhatsApp connectée.
 • Puis réessayez /connect
 
 💡 *Rappel:* 1 utilisateur = 1 session active maximum
-                            """),
-                            parse_mode='MarkdownV2',
-                            reply_markup=self.get_main_keyboard()
-                        )
-                    		return
-		except Exception as e:
-    		logger.warning(f"⚠️ Impossible de vérifier l'état réel de la session: {e}")
-    		# 🔥 MODIFICATION : Continuer avec une vérification basique si l'API échoue
-    		if existing_session and existing_session.get('status') == 'connected':
-        		session_days = await self.get_session_days(existing_session.get('created_at'))
-        		await update.message.reply_text(
-            		self.escape_markdown(f"""
+                                """),
+                                parse_mode='MarkdownV2',
+                                reply_markup=self.get_main_keyboard()
+                            )
+                            return
+        except Exception as e:
+            logger.warning(f"⚠️ Impossible de vérifier l'état réel de la session: {e}")
+            # 🔥 MODIFICATION : Continuer avec une vérification basique si l'API échoue
+            if existing_session and existing_session.get('status') == 'connected':
+                session_days = await self.get_session_days(existing_session.get('created_at'))
+                await update.message.reply_text(
+                    self.escape_markdown(f"""
 🚫 *Session déjà active!*
 
 Une session est déjà connectée pour votre compte.
@@ -688,17 +716,17 @@ Une session est déjà connectée pour votre compte.
 📅 Active depuis: {session_days} jour(s)
 
 Utilisez /disconnect pour déconnecter d'abord, puis /connect pour une nouvelle session.
-                """),
-                parse_mode='MarkdownV2',
-                reply_markup=self.get_main_keyboard()
-            )
-        		return
+                    """),
+                    parse_mode='MarkdownV2',
+                    reply_markup=self.get_main_keyboard()
+                )
+                return
     
-		# 🔥 MODIFICATION : Si aucune session active, continuer avec QR
-		await update.message.reply_text(
-        self.escape_markdown("🔄 Génération du QR Code..."),
-        parse_mode='MarkdownV2'
-		)  
+        # 🔥 MODIFICATION : Si aucune session active, continuer avec QR
+        await update.message.reply_text(
+            self.escape_markdown("🔄 Génération du QR Code..."),
+            parse_mode='MarkdownV2'
+        )  
             
         
         session_data = await self.create_whatsapp_session(chat_id, user.first_name, 'qr')
@@ -753,15 +781,15 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
 
         #Modifications effectué 
         try:
-    		async with aiohttp.ClientSession() as session:
-        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
-            		if response.status == 200:
-            			real_status = await response.json()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+                    if response.status == 200:
+                        real_status = await response.json()
                     
-                		if real_status.get('hasActiveSession'):
-                    		# 🔥 NOUVEAU : Message clair avec explication
-                    		await update.message.reply_text(
-                            self.escape_markdown(f"""
+                        if real_status.get('hasActiveSession'):
+                            # 🔥 NOUVEAU : Message clair avec explication
+                            await update.message.reply_text(
+                                self.escape_markdown(f"""
 🚫 *Session déjà active!*
 
 Vous avez déjà une session WhatsApp connectée.
@@ -775,24 +803,24 @@ Le système permet une seule session active par utilisateur.
 • Puis réessayez /connect
 
 💡 Le Pairing Code ne peut pas fonctionner avec une session active existante.
-                            """),
-                            parse_mode='MarkdownV2',
-                            reply_markup=self.get_main_keyboard()
-                        )
-                    		return
-		except Exception as e:
-    		logger.warning(f"⚠️ Impossible de vérifier l'état des sessions: {e}")
-    		# 🔥 MODIFICATION : Vérification de fallback
-    		existing_session = await self.get_user_session(chat_id)
-    		if existing_session and existing_session.get('status') == 'connected':
-        		await update.message.reply_text(
-                self.escape_markdown("🚫 Session déjà active! Utilisez /disconnect d'abord."),
-                parse_mode='MarkdownV2',
-                reply_markup=self.get_main_keyboard()
-            )
-        		return
+                                """),
+                                parse_mode='MarkdownV2',
+                                reply_markup=self.get_main_keyboard()
+                            )
+                            return
+        except Exception as e:
+            logger.warning(f"⚠️ Impossible de vérifier l'état des sessions: {e}")
+            # 🔥 MODIFICATION : Vérification de fallback
+            existing_session = await self.get_user_session(chat_id)
+            if existing_session and existing_session.get('status') == 'connected':
+                await update.message.reply_text(
+                    self.escape_markdown("🚫 Session déjà active! Utilisez /disconnect d'abord."),
+                    parse_mode='MarkdownV2',
+                    reply_markup=self.get_main_keyboard()
+                )
+                return
     
-		# 🔥 MODIFICATION : Si aucune session active, continuer avec pairing
+        # 🔥 MODIFICATION : Si aucune session active, continuer avec pairing
         await self.ask_phone_number(update, context)
 
     async def process_phone_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -807,14 +835,14 @@ Le système permet une seule session active par utilisateur.
         # Validation du numéro
         if not phone_number.isdigit() or len(phone_number) < 8 or len(phone_number) > 15:
             await update.message.reply_text(
-            self.escape_markdown("❌ Numéro invalide\n\n" +
-                                "Format attendu: 8 à 15 chiffres\n" +
-                                "Exemples:\n" +
-                                "• 237612345678 (12 chiffres)\n" +
-                                "• 14155552671 (11 chiffres)\n" +
-                                "• 33123456789 (11 chiffres)\n\n" +
-                                "Veuillez réessayer:"),
-            parse_mode='MarkdownV2'
+                self.escape_markdown("❌ Numéro invalide\n\n" +
+                                    "Format attendu: 8 à 15 chiffres\n" +
+                                    "Exemples:\n" +
+                                    "• 237612345678 (12 chiffres)\n" +
+                                    "• 14155552671 (11 chiffres)\n" +
+                                    "• 33123456789 (11 chiffres)\n\n" +
+                                    "Veuillez réessayer:"),
+                parse_mode='MarkdownV2'
             )
             return
     
@@ -1361,232 +1389,95 @@ Pour plus de détails: /stats
         else:
             await update.message.reply_text("❌ Aucun utilisateur actif trouvé.")
 
-    # =========================================================================
-    # MÉTHODES POUR LE PONT HTTP - Appelées par le serveur HTTP
-    # =========================================================================
-
-    async def send_direct_message(self, user_id, message):
-        """Envoyer un message directement via Telegram"""
-        try:
-             # Échapper les caractères spéciaux Markdown
-            escaped_message = self.escape_markdown(message)
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text=escaped_message,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"✅ Message envoyé à {user_id}")
-            return True
-        except Exception as e:
-            logger.error(f"❌ Erreur envoi message à {user_id}: {e}")
-            try:
-                await self.application.bot.send_message(
-                chat_id=user_id,
-                text=message  # Sans parse_mode
-            )
-                logger.info(f"✅ Message envoyé (sans Markdown) à {user_id}")
-                return True
-            except Exception as fallback_error:
-                logger.error(f"❌ Erreur fallback message à {user_id}: {fallback_error}")
-                return False
-            
-            
-            
-             
-            
-
-    async def send_qr_code(self, user_id, qr_code, session_id):
-        """Envoyer un QR code via Telegram"""
-        try:
-            # Générer l'image QR code
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=4,
-            )
-            qr.add_data(qr_code)
-            qr.make(fit=True)
-
-            img = qr.make_image(fill_color="black", back_color="white")
-        
-            # Convertir en bytes
-            img_buffer = io.BytesIO()
-            img.save(img_buffer, format='PNG')
-            img_buffer.seek(0)
-
-            # Préparer le message
-            instructions = self.escape_markdown(f"""
-📱 Connexion WhatsApp - QR Code
-
-1. Ouvrez WhatsApp → Paramètres
-2. Appareils liés → Lier un appareil  
-3. Scannez le QR code ci-dessous
-4. Attendez la confirmation
-
-🔐 SESSION PERMANENTE
-Votre session restera active automatiquement
-
-⏱️ Le QR expire dans 2 minutes
-            """)
-
-            # Envoyer d'abord les instructions
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text=instructions,
-                parse_mode='MarkdownV2'
-            )
-
-            # Ensuite envoyer l'image QR code
-            await self.application.bot.send_photo(
-                chat_id=user_id,
-                photo=img_buffer,
-                caption="Scannez ce QR code avec WhatsApp 📲"
-            )
-        
-            logger.info(f"✅ QR Code envoyé à {user_id} - Session: {session_id}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"❌ Erreur envoi QR code: {e}")
-            # Fallback: envoyer le texte du QR code
-            try:
-                await self.application.bot.send_message(
-                    chat_id=user_id,
-                    text=self.escape_markdown(f"❌ Impossible de générer l'image QR\n\nCode texte: `{qr_code}`\n\nCopiez ce code manuellement dans WhatsApp"),
-                    parse_mode='MarkdownV2'
-                )
-                return True
-            except Exception as fallback_error:
-                logger.error(f"❌ Erreur fallback QR code: {fallback_error}")
-                return False
-
-    async def send_pairing_code(self, user_id, pairing_code, phone_number):
-        """Envoyer un code de pairing via Telegram"""
-        try:
-            pairing_text = self.escape_markdown(f"""
-🔐 Connexion par Code de Pairing
-
-📱Numéro whatsapp:
-*{phone_number}*
-📱 Votre code de pairing:
-*{pairing_code}*
-
-Instructions:
-1. Ouvrez WhatsApp sur votre téléphone
-2. Allez dans Paramètres → Appareils liés 
-3. Sélectionnez Lier un appareil
-4. Entrez le code ci-dessus
-5. Attendez la confirmation
-
-⏱️ Ce code expire dans 5 minutes
-
-La connexion se fera automatiquement!
-            """)
-        
-            await self.application.bot.send_message(
-                chat_id=user_id,
-                text=pairing_text,
-                parse_mode='MarkdownV2'
-            )
-            logger.info(f"✅ Code de pairing envoyé à {user_id}: {pairing_code}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"❌ Erreur envoi code pairing: {e}")
-            return False
-
-	async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-		"""Déconnecter la session WhatsApp active"""
-		chat_id = update.effective_chat.id
+    async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Déconnecter la session WhatsApp active"""
+        chat_id = update.effective_chat.id
     
-		try:
-    		# Vérifier si une session existe
-    		session_info = await self.get_session_info(chat_id)
+        try:
+            # Vérifier si une session existe
+            session_info = await self.get_session_info(chat_id)
         
-    		if not session_info or not session_info.get('hasActiveSession'):
-        		await update.message.reply_text(
-                self.escape_markdown("""
+            if not session_info or not session_info.get('hasActiveSession'):
+                await update.message.reply_text(
+                    self.escape_markdown("""
 ℹ️ *Aucune session active*
 
 Vous n'avez pas de session WhatsApp connectée.
 
 Utilisez /connect pour créer une nouvelle session.
-                """),
-                parse_mode='MarkdownV2',
-                reply_markup=self.get_main_keyboard()
+                    """),
+                    parse_mode='MarkdownV2',
+                    reply_markup=self.get_main_keyboard()
+                )
+                return
+        
+            # Déconnecter la session
+            await update.message.reply_text(
+                self.escape_markdown("🔌 *Déconnexion en cours...*"),
+                parse_mode='MarkdownV2'
             )
-        		return
         
-    		# Déconnecter la session
-    		await update.message.reply_text(
-            self.escape_markdown("🔌 *Déconnexion en cours...*"),
-            parse_mode='MarkdownV2'
-    		)
-        
-    		async with aiohttp.ClientSession() as session:
-        		async with session.post(f"{NODE_API_URL}/api/sessions/disconnect-user", json={
-                'user_id': str(chat_id)
-        		}) as response:
-            		if response.status == 200:
-                		result = await response.json()
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{NODE_API_URL}/api/sessions/disconnect-user", json={
+                    'user_id': str(chat_id)
+                }) as response:
+                    if response.status == 200:
+                        result = await response.json()
                     
-                		if result.get('success'):
-                    		await update.message.reply_text(
-                            self.escape_markdown("""
+                        if result.get('success'):
+                            await update.message.reply_text(
+                                self.escape_markdown("""
 ✅ *Session déconnectée!*
 
 Votre session WhatsApp a été déconnectée.
 
 Vous pouvez maintenant utiliser /connect pour une nouvelle connexion.
-                            """),
-                            parse_mode='MarkdownV2',
-                            reply_markup=self.get_main_keyboard()
-                        )
-                		else:
-                    		await update.message.reply_text(
-                            self.escape_markdown(f"""
+                                """),
+                                parse_mode='MarkdownV2',
+                                reply_markup=self.get_main_keyboard()
+                            )
+                        else:
+                            await update.message.reply_text(
+                                self.escape_markdown(f"""
 ❌ *Erreur de déconnexion*
 
 {result.get('error', 'Erreur inconnue')}
 
 Veuillez réessayer ou contacter le support.
-                            """),
-                            parse_mode='MarkdownV2'
-                        )
-            		else:
-                		raise Exception("Erreur API déconnexion")
+                                """),
+                                parse_mode='MarkdownV2'
+                            )
+                    else:
+                        raise Exception("Erreur API déconnexion")
                     
-		except Exception as e:
-    		logger.error(f"❌ Erreur commande disconnect: {e}")
-    		await update.message.reply_text(
-            self.escape_markdown("""
+        except Exception as e:
+            logger.error(f"❌ Erreur commande disconnect: {e}")
+            await update.message.reply_text(
+                self.escape_markdown("""
 ❌ *Erreur de déconnexion*
 
 Impossible de déconnecter la session.
 
 Veuillez réessayer ou contacter le support.
-            """),
-            parse_mode='MarkdownV2'
-)
+                """),
+                parse_mode='MarkdownV2'
+            )
 
-
-	async def get_session_info(self, chat_id):
-		"""Obtenir les informations détaillées de la session active"""
-		try:
-    		async with aiohttp.ClientSession() as session:
-        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
-            		if response.status == 200:
-                		return await response.json()
-		except Exception as e:
-    		logger.error(f"❌ Erreur récupération infos session: {e}")
+    async def get_session_info(self, chat_id):
+        """Obtenir les informations détaillées de la session active"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+                    if response.status == 200:
+                        return await response.json()
+        except Exception as e:
+            logger.error(f"❌ Erreur récupération infos session: {e}")
     
-		return None
+        return None
 
     # =========================================================================
     # MÉTHODES D'API POUR COMMUNIQUER AVEC LE SERVEUR NODE.JS
     # =========================================================================
-
 
     async def register_user(self, chat_id, name, username):
         """Enregistrer un utilisateur dans la base"""

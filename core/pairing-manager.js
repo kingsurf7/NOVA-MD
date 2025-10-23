@@ -7,7 +7,8 @@ const chalk = require("chalk");
 const readline = require("readline");
 const {
   default: makeWASocket,
-  useMultiFileAuthState,
+  useMultiFileAuthState, 
+  DisconnectReason, 
   delay,
   PHONENUMBER_MCC,
   Browsers
@@ -170,19 +171,9 @@ class PairingManager {
         defaultQueryTimeoutMs: 120000,
         keepAliveIntervalMs: 30000,
         retryRequestDelayMs: 5000,
-        maxRetries: 3,
-        emitOwnEvents: false,
-        generateHighQualityLinkPreview: false,
-        fireInitQueries: false,
+        maxRetries:3,
+        generateHighQualityLinkPreview: false, 
         mobile: false,
-        appStateMacVerification: {
-          patch: true,
-          snapshot: false
-        },
-        transactionOpts: {
-          maxCommitRetries: 3,
-          delayBeforeRetry: 2000
-        },
         getMessage: async () => undefined, 
         msgRetryCounterCache: new Map(),
         messageResendCache: new Map() 
@@ -227,7 +218,7 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 490000);
+              }, 420000);
 
               this.connectionTimeouts.set(userId, connectionTimeout);
 
@@ -249,8 +240,7 @@ class PairingManager {
               log.info(`🔄 Tentative ${retryCount}/3 de pairing pour ${userId}`);
               await this.sendMessageViaHTTP(userId,
                 `🔄 *Tentative ${retryCount}/3 en cours...*\n\n` +
-                `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`
-              );
+                `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`);
               
               setTimeout(() => {
                 this.startPairingWithPhone(userId, userData, phoneNumber);

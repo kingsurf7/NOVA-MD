@@ -212,6 +212,7 @@ class NovaMDTelegramBot:
         self.application.add_handler(CommandHandler("status", self.status))
         self.application.add_handler(CommandHandler("menu", self.show_main_menu))
         self.application.add_handler(CommandHandler("whatsapp_settings", self.whatsapp_settings))
+        self.application.add_handler(CommandHandler("disconnect", self.disconnect_command))
         
         # Commandes admin
         self.application.add_handler(CommandHandler("admin", self.admin_panel))
@@ -560,7 +561,32 @@ Veuillez entrer votre numéro de téléphone WhatsApp:
     async def start_trial_session(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.effective_chat.id
         user = update.effective_user
-        
+        try:
+    		async with aiohttp.ClientSession() as session:
+        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+            		if response.status == 200:
+                		real_status = await response.json()
+                    
+                		if real_status.get('hasActiveSession'):
+                    		await update.message.reply_text(
+                            self.escape_markdown("""
+🚫 *Session déjà active!*
+
+Vous avez déjà une session WhatsApp connectée.
+
+Impossible de démarrer un essai avec une session active.
+
+Utilisez /disconnect pour déconnecter d'abord, puis réessayez.
+                            """),
+                            parse_mode='MarkdownV2',
+                            reply_markup=self.get_main_keyboard()
+                        )
+                    		return
+		except Exception as e:
+        logger.warning(f"⚠️ Impossible de vérifier les sessions pour l'essai: {e}")
+        # Continuer malgré l'erreur
+    
+		# Si aucune session active, continuer avec l'essai
         await update.message.reply_text(
             self.escape_markdown("🎯 Démarrage de votre essai gratuit 24h!\n\nCréation de votre session WhatsApp..."),
             parse_mode='MarkdownV2'
@@ -616,25 +642,64 @@ Choisissez la méthode de connexion:
         
         # Vérifier si une session active existe déjà
         existing_session = await self.get_user_session(chat_id)
-        if existing_session and existing_session.get('status') == 'connected':
-            session_days = await self.get_session_days(existing_session.get('created_at'))
-            await update.message.reply_text(
-                self.escape_markdown(f"""
-✅ Session déjà active!
 
-Session permanente active depuis {session_days} jours
-Active jusqu'au {access_check.get('endDate', 'N/A')}
+        # VÉRIFICATION SUPPLÉMENTAIRE : contacter le serveur Node.js pour l'état réel
+        try:
+    		async with aiohttp.ClientSession() as session:
+        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+            		if response.status == 200:
+                		real_session_data = await response.json()
+                		if real_session_data and real_session_data.get('hasActiveSession'):
+                    		# 🔥 NOUVEAU : Message clair avec options
+                    		session_days = await self.get_session_days(real_session_data.get('created_at'))
+                    		await update.message.reply_text(
+                        		self.escape_markdown(f"""
+🚫 *Session déjà active!*
+
+Vous avez déjà une session WhatsApp connectée.
+
+📱 *Session active:*
+• Méthode: {real_session_data.get('connectionMethod', 'Inconnue')}
+• Statut: {'💎 Permanent' if real_session_data.get('subscriptionActive') else '⚠️ Essai'}
+• Active depuis: {session_days} jour(s)
+
+🔧 *Que faire?*
+• Attendez que WhatsApp se reconnecte automatiquement
+• Ou utilisez /disconnect pour déconnecter d'abord
+• Puis réessayez /connect
+
+💡 *Rappel:* 1 utilisateur = 1 session active maximum
+                            """),
+                            parse_mode='MarkdownV2',
+                            reply_markup=self.get_main_keyboard()
+                        )
+                    		return
+		except Exception as e:
+    		logger.warning(f"⚠️ Impossible de vérifier l'état réel de la session: {e}")
+    		# 🔥 MODIFICATION : Continuer avec une vérification basique si l'API échoue
+    		if existing_session and existing_session.get('status') == 'connected':
+        		session_days = await self.get_session_days(existing_session.get('created_at'))
+        		await update.message.reply_text(
+            		self.escape_markdown(f"""
+🚫 *Session déjà active!*
+
+Une session est déjà connectée pour votre compte.
+
+📅 Active depuis: {session_days} jour(s)
+
+Utilisez /disconnect pour déconnecter d'abord, puis /connect pour une nouvelle session.
                 """),
                 parse_mode='MarkdownV2',
                 reply_markup=self.get_main_keyboard()
             )
-            return
+        		return
+    
+		# 🔥 MODIFICATION : Si aucune session active, continuer avec QR
+		await update.message.reply_text(
+        self.escape_markdown("🔄 Génération du QR Code..."),
+        parse_mode='MarkdownV2'
+		)  
             
-        # Créer une nouvelle session QR
-        await update.message.reply_text(
-            self.escape_markdown("🔄 Génération du QR Code..."),
-            parse_mode='MarkdownV2'
-        )
         
         session_data = await self.create_whatsapp_session(chat_id, user.first_name, 'qr')
         if session_data and 'qr_code' in session_data:
@@ -685,8 +750,49 @@ Valable jusqu'au {access_check.get('endDate', 'N/A')}
                 reply_markup=self.get_main_keyboard()
             )
             return
-        
-        # Demander le numéro de téléphone
+
+        #Modifications effectué 
+        try:
+    		async with aiohttp.ClientSession() as session:
+        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+            		if response.status == 200:
+            			real_status = await response.json()
+                    
+                		if real_status.get('hasActiveSession'):
+                    		# 🔥 NOUVEAU : Message clair avec explication
+                    		await update.message.reply_text(
+                            self.escape_markdown(f"""
+🚫 *Session déjà active!*
+
+Vous avez déjà une session WhatsApp connectée.
+
+❌ *Impossible de créer une nouvelle session*
+Le système permet une seule session active par utilisateur.
+
+🔧 *Solutions:*
+• Attendez la reconnexion automatique de WhatsApp
+• Ou utilisez /disconnect pour déconnecter
+• Puis réessayez /connect
+
+💡 Le Pairing Code ne peut pas fonctionner avec une session active existante.
+                            """),
+                            parse_mode='MarkdownV2',
+                            reply_markup=self.get_main_keyboard()
+                        )
+                    		return
+		except Exception as e:
+    		logger.warning(f"⚠️ Impossible de vérifier l'état des sessions: {e}")
+    		# 🔥 MODIFICATION : Vérification de fallback
+    		existing_session = await self.get_user_session(chat_id)
+    		if existing_session and existing_session.get('status') == 'connected':
+        		await update.message.reply_text(
+                self.escape_markdown("🚫 Session déjà active! Utilisez /disconnect d'abord."),
+                parse_mode='MarkdownV2',
+                reply_markup=self.get_main_keyboard()
+            )
+        		return
+    
+		# 🔥 MODIFICATION : Si aucune session active, continuer avec pairing
         await self.ask_phone_number(update, context)
 
     async def process_phone_number(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1361,8 +1467,10 @@ Votre session restera active automatiquement
             pairing_text = self.escape_markdown(f"""
 🔐 Connexion par Code de Pairing
 
+📱Numéro whatsapp:
+*{phone_number}*
 📱 Votre code de pairing:
-`{pairing_code}`
+*{pairing_code}*
 
 Instructions:
 1. Ouvrez WhatsApp sur votre téléphone
@@ -1388,9 +1496,97 @@ La connexion se fera automatiquement!
             logger.error(f"❌ Erreur envoi code pairing: {e}")
             return False
 
+	async def disconnect_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+		"""Déconnecter la session WhatsApp active"""
+		chat_id = update.effective_chat.id
+    
+		try:
+    		# Vérifier si une session existe
+    		session_info = await self.get_session_info(chat_id)
+        
+    		if not session_info or not session_info.get('hasActiveSession'):
+        		await update.message.reply_text(
+                self.escape_markdown("""
+ℹ️ *Aucune session active*
+
+Vous n'avez pas de session WhatsApp connectée.
+
+Utilisez /connect pour créer une nouvelle session.
+                """),
+                parse_mode='MarkdownV2',
+                reply_markup=self.get_main_keyboard()
+            )
+        		return
+        
+    		# Déconnecter la session
+    		await update.message.reply_text(
+            self.escape_markdown("🔌 *Déconnexion en cours...*"),
+            parse_mode='MarkdownV2'
+    		)
+        
+    		async with aiohttp.ClientSession() as session:
+        		async with session.post(f"{NODE_API_URL}/api/sessions/disconnect-user", json={
+                'user_id': str(chat_id)
+        		}) as response:
+            		if response.status == 200:
+                		result = await response.json()
+                    
+                		if result.get('success'):
+                    		await update.message.reply_text(
+                            self.escape_markdown("""
+✅ *Session déconnectée!*
+
+Votre session WhatsApp a été déconnectée.
+
+Vous pouvez maintenant utiliser /connect pour une nouvelle connexion.
+                            """),
+                            parse_mode='MarkdownV2',
+                            reply_markup=self.get_main_keyboard()
+                        )
+                		else:
+                    		await update.message.reply_text(
+                            self.escape_markdown(f"""
+❌ *Erreur de déconnexion*
+
+{result.get('error', 'Erreur inconnue')}
+
+Veuillez réessayer ou contacter le support.
+                            """),
+                            parse_mode='MarkdownV2'
+                        )
+            		else:
+                		raise Exception("Erreur API déconnexion")
+                    
+		except Exception as e:
+    		logger.error(f"❌ Erreur commande disconnect: {e}")
+    		await update.message.reply_text(
+            self.escape_markdown("""
+❌ *Erreur de déconnexion*
+
+Impossible de déconnecter la session.
+
+Veuillez réessayer ou contacter le support.
+            """),
+            parse_mode='MarkdownV2'
+)
+
+
+	async def get_session_info(self, chat_id):
+		"""Obtenir les informations détaillées de la session active"""
+		try:
+    		async with aiohttp.ClientSession() as session:
+        		async with session.get(f"{NODE_API_URL}/api/sessions/real-status/{chat_id}") as response:
+            		if response.status == 200:
+                		return await response.json()
+		except Exception as e:
+    		logger.error(f"❌ Erreur récupération infos session: {e}")
+    
+		return None
+
     # =========================================================================
     # MÉTHODES D'API POUR COMMUNIQUER AVEC LE SERVEUR NODE.JS
     # =========================================================================
+
 
     async def register_user(self, chat_id, name, username):
         """Enregistrer un utilisateur dans la base"""

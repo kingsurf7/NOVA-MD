@@ -28,49 +28,45 @@ class NovaMDApp {
         this.initialize();
     }
 
-    // AJOUTER cette méthode pour charger les commandes WhatsApp
-	async loadWhatsAppCommands() {
-		try {
-			const commandsPath = path.join(__dirname, './commands');
-			// Vérifier si le dossier existe
-			if (!fs.existsSync(commandsPath)) {
-				log.warn('📁 Dossier commands non trouvé, création...');
-				fs.mkdirSync(commandsPath, { recursive: true });
-        		return;
-    		}
-        
-    		const files = fs.readdirSync(commandsPath);
-        	let loadedCount = 0;
-        
-    		for (const file of files) {
-        		if (file.endsWith('.js')) {
-            		try {
-                		const commandPath = path.join(commandsPath, file);
-                		const command = require(commandPath);
-                    
-                		if (command.name && command.run) {
-                    		this.commands.set(command.name, command);
-                    		loadedCount++;
-                    		log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
-                		}
-            		} catch (error) {
-                		log.error(`❌ Erreur chargement commande ${file}:`, error);
+    async loadWhatsAppCommands() {
+        try {
+            const commandsPath = path.join(__dirname, './commands');
+            if (!fs.existsSync(commandsPath)) {
+                log.warn('📁 Dossier commands non trouvé, création...');
+                fs.mkdirSync(commandsPath, { recursive: true });
+                return;
+            }
+            
+            const files = fs.readdirSync(commandsPath);
+            let loadedCount = 0;
+            
+            for (const file of files) {
+                if (file.endsWith('.js')) {
+                    try {
+                        const commandPath = path.join(commandsPath, file);
+                        const command = require(commandPath);
+                        
+                        if (command.name && command.run) {
+                            this.commands.set(command.name, command);
+                            loadedCount++;
+                            log.success(`✅ Commande WhatsApp chargée: ${command.name}`);
+                        }
+                    } catch (error) {
+                        log.error(`❌ Erreur chargement commande ${file}:`, error);
+                    }
                 }
-        	}
-    	}
-        
-    		log.success(`📁 ${loadedCount} commandes WhatsApp chargées`);
-		} catch (error) {
-        log.error('❌ Erreur chargement commandes WhatsApp:', error);
-		}
-	}
+            }
+            
+            log.success(`📁 ${loadedCount} commandes WhatsApp chargées`);
+        } catch (error) {
+            log.error('❌ Erreur chargement commandes WhatsApp:', error);
+        }
+    }
 
-	// MODIFIER la méthode initialize
-	async initialize() {
-		await this.loadWhatsAppCommands(); // AJOUTER cette ligne
+    async initialize() {
+        await this.loadWhatsAppCommands();
         await this.commandHandler.loadBuiltInCommands();
         
-        // Tester la connexion avec le bot Python
         await this.testBotConnection();
         
         log.success("🚀 NOVA-MD initialisé avec sessions persistantes");
@@ -174,7 +170,6 @@ class NovaMDApp {
 
                 log.info(`📤 [PONT] Envoi message à ${user_id}: ${message.substring(0, 50)}...`);
                 
-                // Envoyer le message au bot Python via webhook
                 const botResult = await this.sendToBotWebhook('send-message', {
                     user_id: user_id,
                     message: message
@@ -192,7 +187,6 @@ class NovaMDApp {
                     });
                 } else {
                     log.warn(`⚠️  Message non délivré à ${user_id}, fallback console`);
-                    // Fallback: afficher dans la console
                     console.log(`💬 [TELEGRAM-FALLBACK] Message pour ${user_id}: ${message}`);
                     
                     res.json({ 
@@ -228,7 +222,6 @@ class NovaMDApp {
 
                 log.info(`📱 [PONT] Envoi QR à ${user_id} (session: ${session_id})`);
                 
-                // Envoyer le QR au bot Python via webhook
                 const botResult = await this.sendToBotWebhook('send-qr', {
                     user_id: user_id,
                     qr_code: qr_code,
@@ -247,7 +240,6 @@ class NovaMDApp {
                     });
                 } else {
                     log.warn(`⚠️  QR non délivré à ${user_id}, fallback console`);
-                    // Fallback: afficher dans la console
                     console.log(`📱 [TELEGRAM-FALLBACK] QR Code pour ${user_id}: ${qr_code}`);
                     
                     res.json({ 
@@ -284,7 +276,6 @@ class NovaMDApp {
 
                 log.info(`🔐 [PONT] Envoi pairing à ${user_id}: ${pairing_code}`);
                 
-                // Envoyer le code de pairing au bot Python via webhook
                 const botResult = await this.sendToBotWebhook('send-pairing', {
                     user_id: user_id,
                     pairing_code: pairing_code,
@@ -303,7 +294,6 @@ class NovaMDApp {
                     });
                 } else {
                     log.warn(`⚠️  Code pairing non délivré à ${user_id}, fallback console`);
-                    // Fallback: afficher dans la console
                     console.log(`🔐 [TELEGRAM-FALLBACK] Pairing Code pour ${user_id}: ${pairing_code}`);
                     
                     res.json({ 
@@ -332,7 +322,6 @@ class NovaMDApp {
                 const { bot_available, methods, webhook_url } = req.body;
                 
                 if (bot_available) {
-                    // Mettre à jour l'URL du webhook si fournie
                     if (webhook_url) {
                         this.botWebhookUrl = webhook_url;
                         log.info(`🌉 URL webhook bot mise à jour: ${webhook_url}`);
@@ -364,7 +353,7 @@ class NovaMDApp {
         });
 
         // =========================================================================
-        // ROUTES EXISTANTES
+        // ROUTES AUTH ET SESSIONS
         // =========================================================================
 
         this.app.post('/api/auth/validate-code', async (req, res) => {
@@ -404,12 +393,10 @@ class NovaMDApp {
                     return res.status(400).json({ error: 'Numéro de téléphone requis' });
                 }
 
-                // 🔒 Stocker uniquement les données nécessaires, SANS le numéro
                 const userData = { 
                     name: user_name
                 };
                 
-                // Passer le numéro uniquement pour le traitement immédiat
                 const sessionData = await this.sessionManager.createSessionWithPhone(
                     chat_id, 
                     userData, 
@@ -441,6 +428,58 @@ class NovaMDApp {
             }
         });
 
+        // 🔥 NOUVELLE ROUTE : État réel des sessions
+        this.app.get('/api/sessions/real-status/:userId', async (req, res) => {
+            try {
+                const userId = req.params.userId;
+                
+                let realStatus = {
+                    hasActiveSession: false,
+                    sessionId: null,
+                    socketActive: false,
+                    connectionState: 'disconnected',
+                    inMemory: false,
+                    inDatabase: false
+                };
+
+                // Vérifier en mémoire
+                for (const [sessionId, sessionData] of this.sessionManager.sessions) {
+                    if (sessionData.userId === userId) {
+                        realStatus.inMemory = true;
+                        realStatus.sessionId = sessionId;
+                        
+                        if (sessionData.status === 'connected' && sessionData.socket) {
+                            realStatus.hasActiveSession = true;
+                            realStatus.connectionState = sessionData.socket.connection || 'unknown';
+                            realStatus.socketActive = sessionData.socket.connection === 'open';
+                        }
+                        break;
+                    }
+                }
+
+                // Vérifier dans la base de données
+                const { data: dbSession } = await this.sessionManager.supabase
+                    .from('whatsapp_sessions')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('status', 'connected')
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .single();
+
+                if (dbSession) {
+                    realStatus.inDatabase = true;
+                    if (!realStatus.sessionId) {
+                        realStatus.sessionId = dbSession.session_id;
+                    }
+                }
+
+                res.json(realStatus);
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         this.app.get('/api/sessions/integrity', async (req, res) => {
             try {
                 const integrity = await this.sessionManager.verifyPostUpdateIntegrity();
@@ -449,6 +488,20 @@ class NovaMDApp {
                 res.status(500).json({ error: error.message });
             }
         });
+
+        // 🔥 NOUVELLE ROUTE : Déconnexion manuelle
+        this.app.post('/api/sessions/disconnect/:userId', async (req, res) => {
+            try {
+                const result = await this.sessionManager.disconnectUserSession(req.params.userId);
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // =========================================================================
+        // ROUTES ADMIN
+        // =========================================================================
 
         this.app.post('/api/admin/generate-code', async (req, res) => {
             try {
@@ -478,6 +531,10 @@ class NovaMDApp {
                 res.status(500).json({ error: error.message });
             }
         });
+
+        // =========================================================================
+        // ROUTES UPDATES
+        // =========================================================================
 
         this.app.get('/api/updates/check', async (req, res) => {
             try {
@@ -519,6 +576,10 @@ class NovaMDApp {
             }
         });
 
+        // =========================================================================
+        // ROUTES COMMANDES
+        // =========================================================================
+
         this.app.get('/api/commands/info', async (req, res) => {
             try {
                 const stats = this.commandManager.getCommandStats();
@@ -546,6 +607,10 @@ class NovaMDApp {
                 res.status(500).json({ error: error.message });
             }
         });
+
+        // =========================================================================
+        // ROUTES UTILISATEURS ET PARAMÈTRES
+        // =========================================================================
 
         this.app.get('/api/user/:userId/whatsapp-settings', async (req, res) => {
             try {
@@ -603,6 +668,10 @@ class NovaMDApp {
             }
         });
 
+        // =========================================================================
+        // GESTION DES ERREURS
+        // =========================================================================
+
         this.app.use('*', (req, res) => {
             res.status(404).json({ 
                 error: 'Route non trouvée',
@@ -633,7 +702,7 @@ class NovaMDApp {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(data),
-                timeout: 10000 // 10 secondes timeout
+                timeout: 10000
             });
 
             if (response.ok) {

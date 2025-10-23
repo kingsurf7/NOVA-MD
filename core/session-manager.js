@@ -94,14 +94,14 @@ class SessionManager {
             const isTrial = !access.hasAccess;
             
             if (hasAccess && !isTrial) {
-                const existingSession = await this.getUserActiveSession(userId);
-                if (existingSession && existingSession.status === 'connected') {
+                const existingSession = await this.getRealActiveSession(userId);
+                if (existingSession && existingSession.socketActive) {
                     log.info(`🔄 Session existante réutilisée pour ${userId} (${isTrial ? 'Essai' : 'Payant'})`);
-                    await this.updateSessionActivity(existingSession.session_id);
+                    await this.updateSessionActivity(existingSession.sessionId);
                     
                     return {
-                        sessionId: existingSession.session_id,
-                        method: existingSession.connection_method || 'qr',
+                        sessionId: existingSession.sessionId,
+                        method: existingSession.connectionMethod || 'qr',
                         existing: true,
                         persistent: !isTrial,
                         isTrial: isTrial
@@ -124,10 +124,7 @@ class SessionManager {
     }
 
     async createSessionWithPhone(userId, userData, method, phoneNumber) {
-
         try {
-			// NETTOYAGE PRÉALABLE des sessions existantes
-    		await this.pairingManager.forceCleanupSessions(userId);
             const access = await this.authManager.checkUserAccess(userId);
             const trial = await this.trialManager.checkTrialAccess(userId);
             
@@ -140,8 +137,34 @@ class SessionManager {
                 }
             }
 
-            const isTrial = !access.hasAccess;
+            // 🔥 VÉRIFICATION RÉELLE des sessions actives
+            const activeSession = await this.getRealActiveSession(userId);
             
+            if (activeSession) {
+                log.warn(`🚫 Session déjà active pour ${userId} - pairing refusé`);
+                
+                // INFORMER l'utilisateur de la session existante
+                await this.sendMessage(userId,
+                    `🚫 *Session déjà active!*\n\n` +
+                    `Vous avez déjà une session WhatsApp connectée.\n\n` +
+                    `📱 *Session active:*\n` +
+                    `• Méthode: ${activeSession.connectionMethod || 'Inconnue'}\n` +
+                    `• Statut: ${activeSession.subscriptionActive ? '💎 Permanent' : '⚠️ Essai'}\n` +
+                    `• Créée: ${this.formatSessionTime(activeSession.createdAt)}\n\n` +
+                    `🔧 *Que faire?*\n` +
+                    `• Attendez que WhatsApp se reconnecte automatiquement\n` +
+                    `• Ou utilisez /disconnect pour déconnecter d'abord\n` +
+                    `• Puis réessayez /connect`
+                );
+                
+                return { 
+                    success: false, 
+                    error: 'SESSION_ALREADY_ACTIVE',
+                    existingSession: activeSession 
+                };
+            }
+
+            // Si aucune session active, continuer avec le pairing
             if (method === 'pairing' && phoneNumber) {
                 log.info(`🔐 Tentative de connexion pairing pour ${userId} avec ${phoneNumber}`);
                 
@@ -177,6 +200,97 @@ class SessionManager {
         }
     }
 
+    // 🔥 NOUVELLE méthode pour vérifier les sessions RÉELLEMENT actives
+    async getRealActiveSession(userId) {
+        try {
+            // 1. Vérifier en mémoire (sessions vraiment connectées)
+            for (const [sessionId, sessionData] of this.sessions) {
+                if (sessionData.userId === userId && sessionData.status === 'connected') {
+                    // VÉRIFIER que la socket est vraiment active
+                    try {
+                        if (sessionData.socket && sessionData.socket.connection === 'open') {
+                            log.info(`✅ Session réellement active trouvée pour ${userId}`);
+                            return {
+                                sessionId,
+                                userId: sessionData.userId,
+                                status: sessionData.status,
+                                subscriptionActive: sessionData.subscriptionActive,
+                                connectionMethod: sessionData.connectionMethod,
+                                createdAt: sessionData.createdAt,
+                                socketActive: true
+                            };
+                        }
+                    } catch (socketError) {
+                        log.warn(`⚠️ Socket inactive pour ${sessionId}: ${socketError.message}`);
+                        // Continuer à chercher
+                    }
+                }
+            }
+
+            // 2. Vérifier dans Supabase
+            const { data: dbSession } = await this.supabase
+                .from('whatsapp_sessions')
+                .select('*')
+                .eq('user_id', userId)
+                .eq('status', 'connected')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+
+            if (dbSession) {
+                log.warn(`⚠️ Session marquée active dans Supabase mais pas en mémoire: ${dbSession.session_id}`);
+                
+                // Vérifier si la session existe en mémoire avec un statut différent
+                const memorySession = this.sessions.get(dbSession.session_id);
+                if (memorySession && memorySession.status !== 'connected') {
+                    // Corriger l'incohérence
+                    await this.supabase
+                        .from('whatsapp_sessions')
+                        .update({ 
+                            status: memorySession.status,
+                            disconnected_at: new Date().toISOString()
+                        })
+                        .eq('session_id', dbSession.session_id);
+                    
+                    return null;
+                }
+                
+                return {
+                    sessionId: dbSession.session_id,
+                    userId: dbSession.user_id,
+                    status: dbSession.status,
+                    subscriptionActive: dbSession.subscription_active,
+                    connectionMethod: dbSession.connection_method,
+                    createdAt: new Date(dbSession.created_at),
+                    socketActive: false,
+                    fromDatabase: true
+                };
+            }
+
+            return null;
+        } catch (error) {
+            log.error('❌ Erreur vérification session active:', error);
+            return null;
+        }
+    }
+
+    // Méthode utilitaire pour formater le temps
+    formatSessionTime(createdAt) {
+        const now = new Date();
+        const created = new Date(createdAt);
+        const diffHours = Math.round((now - created) / (1000 * 60 * 60));
+        
+        if (diffHours < 1) {
+            const diffMinutes = Math.round((now - created) / (1000 * 60));
+            return `il y a ${diffMinutes} minute${diffMinutes > 1 ? 's' : ''}`;
+        } else if (diffHours < 24) {
+            return `il y a ${diffHours} heure${diffHours > 1 ? 's' : ''}`;
+        } else {
+            const diffDays = Math.round(diffHours / 24);
+            return `il y a ${diffDays} jour${diffDays > 1 ? 's' : ''}`;
+        }
+    }
+
     async createQRSession(userId, userData, isPayedUser = false) {
         try {
             await this.sendMessage(userId, "🔄 Création de votre session WhatsApp...");
@@ -197,8 +311,8 @@ class SessionManager {
                 markOnlineOnConnect: false,
                 generateHighQualityLinkPreview: false,
                 emitOwnEvents: false,
-                defaultQueryTimeoutMs: 120000,
-                connectTimeoutMs: 300000,
+                defaultQueryTimeoutMs: 60000,
+                connectTimeoutMs: 120000,
                 keepAliveIntervalMs: 30000,
                 maxRetries: 3,
                 mobile: false,
@@ -339,7 +453,7 @@ class SessionManager {
                         );
                         await this.disconnectSession(sessionId);
                     }
-                }, 600000);
+                }, 720000);
             }
         });
 
@@ -404,29 +518,26 @@ class SessionManager {
         }
     }
 
-    // Dans session-manager.js, ajoutez cette méthode
+    getSessionByUserId(userId) {
+        for (const [sessionId, sessionData] of this.sessions) {
+            if (sessionData.userId === userId && sessionData.status === 'connected') {
+                return { sessionId, ...sessionData };
+            }
+        }
+        return null;
+    }
 
-	getSessionByUserId(userId) {
-		for (const [sessionId, sessionData] of this.sessions) {
-    		if (sessionData.userId === userId && sessionData.status === 'connected') {
-        		return { sessionId, ...sessionData };
-    		}
-		}
-		return null;
-	}
-
-	// Et modifiez la méthode handleIncomingMessage pour mieux gérer les sessions
-	async handleIncomingMessage(m, sessionId) {
-		const session = this.sessions.get(sessionId);
-		if (session && m.messages && session.status === 'connected') {
-    		await this.updateSessionActivity(sessionId);
+    async handleIncomingMessage(m, sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (session && m.messages && session.status === 'connected') {
+            await this.updateSessionActivity(sessionId);
         
-    		for (const message of m.messages) {
-        		if (!message.key.fromMe && message.message) {
-            		await this.handleWhatsAppMessage(message, sessionId);
-        		}
-    		}
-		}
+            for (const message of m.messages) {
+                if (!message.key.fromMe && message.message) {
+                    await this.handleWhatsAppMessage(message, sessionId);
+                }
+            }
+        }
     }
 
     async handleWhatsAppMessage(message, sessionId) {
@@ -465,50 +576,39 @@ class SessionManager {
     }
 
     async handleWhatsAppCommand(commandText, message, sessionId, userSettings) {
-		const session = this.sessions.get(sessionId);
-		const sender = message.key.remoteJid;
-    
-		try {
-    		const args = commandText.slice(1).trim().split(/ +/);
-    		const command = args.shift().toLowerCase();
+        const session = this.sessions.get(sessionId);
+        const sender = message.key.remoteJid;
         
-    		log.info(`🎯 Exécution commande: ${command} avec args:`, args);
-        
-    		// Commandes de configuration
-    		if (command === 'silent') {
-        		await this.handleSilentCommand(args, sender, session, userSettings);
-        		return;
-    		}
-        
-    		if (command === 'private') {
-        		await this.handlePrivateCommand(args, sender, session, userSettings);
-        		return;
-    		}
-        
-    		if (command === 'settings') {
-        		await this.handleSettingsCommand(sender, session, userSettings);
-        		return;
-    		}
-        
-    		if (command === 'help') {
-        		await this.handleHelpCommand(sender, session, userSettings);
-        		return;
-    		}
+        try {
+            const args = commandText.slice(1).trim().split(/ +/);
+            const command = args.shift().toLowerCase();
+            
+            if (command === 'silent') {
+                await this.handleSilentCommand(args, sender, session, userSettings);
+                return;
+            }
+            
+            if (command === 'private') {
+                await this.handlePrivateCommand(args, sender, session, userSettings);
+                return;
+            }
+            
+            if (command === 'settings') {
+                await this.handleSettingsCommand(sender, session, userSettings);
+                return;
+            }
+            
+            if (command === 'help') {
+                await this.handleHelpCommand(sender, session, userSettings);
+                return;
+            }
 
-    		// Commandes fonctionnelles
-    		await this.executeWhatsAppCommand(command, args, message, sessionId, userSettings);
-        
-		} catch (error) {
-    		log.error('❌ Erreur commande WhatsApp:', error);
-    		try {
-        		await this.sendMessageWithMode(sender, session, 
-                "❌ *Erreur lors de l'exécution de la commande*\n\nVeuillez réessayer ou contacter le support.", 
-                userSettings);
-    		} catch (e) {
-        		log.error('❌ Impossible d\'envoyer le message d\'erreur:', e);
-    		}
-		}
-	}
+            await this.executeWhatsAppCommand(command, args, message, sessionId, userSettings);
+            
+        } catch (error) {
+            log.error('❌ Erreur commande WhatsApp:', error);
+        }
+    }
 
     async handleSilentCommand(args, sender, session, userSettings) {
         const newSilentMode = !userSettings.silent_mode;
@@ -897,6 +997,49 @@ Fuseau: UTC+1 (Afrique/Douala)`;
             log.info(`🔌 Session déconnectée manuellement: ${sessionId}`);
         } catch (error) {
             log.error('❌ Erreur déconnexion session:', error);
+        }
+    }
+
+    // 🔥 NOUVELLE méthode pour déconnecter un utilisateur
+    async disconnectUserSession(userId) {
+        try {
+            log.info(`🔌 Déconnexion manuelle pour ${userId}`);
+            
+            let disconnectedCount = 0;
+            
+            // Déconnecter toutes les sessions de cet utilisateur
+            for (const [sessionId, sessionData] of this.sessions) {
+                if (sessionData.userId === userId) {
+                    try {
+                        await this.disconnectSession(sessionId);
+                        disconnectedCount++;
+                        log.success(`✅ Session déconnectée: ${sessionId}`);
+                    } catch (error) {
+                        log.error(`❌ Erreur déconnexion ${sessionId}:`, error);
+                    }
+                }
+            }
+            
+            // Mettre à jour Supabase
+            await this.supabase
+                .from('whatsapp_sessions')
+                .update({
+                    status: 'manually_disconnected',
+                    disconnected_at: new Date().toISOString(),
+                    disconnect_reason: 'user_request'
+                })
+                .eq('user_id', userId)
+                .eq('status', 'connected');
+            
+            return { 
+                success: true, 
+                disconnectedCount: disconnectedCount,
+                message: `${disconnectedCount} session(s) déconnectée(s)`
+            };
+            
+        } catch (error) {
+            log.error('❌ Erreur déconnexion utilisateur:', error);
+            return { success: false, error: error.message };
         }
     }
 

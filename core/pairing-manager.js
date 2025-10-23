@@ -7,8 +7,7 @@ const chalk = require("chalk");
 const readline = require("readline");
 const {
   default: makeWASocket,
-  useMultiFileAuthState, 
-  DisconnectReason, 
+  useMultiFileAuthState,
   delay,
   PHONENUMBER_MCC,
   Browsers
@@ -130,580 +129,332 @@ class PairingManager {
   }
 
   async startPairingWithPhone(userId, userData, phoneNumber) {
-    // NETTOYER COMPLÈTEMENT les sessions existantes
-    const pairingAuthPath = path.join(process.cwd(), this.sessionName);
-    const sessionsPath = path.join(process.cwd(), 'sessions'); 
-    
     try {
-      // Supprimer complètement les dossiers de session existants
-      if (await fs.pathExists(pairingAuthPath)) {
-        await fs.remove(pairingAuthPath);
-      }
+      log.info(`🔐 DÉBUT pairing pour ${userId} avec ${phoneNumber}`);
       
-      // Nettoyer les anciennes sessions pour cet utilisateur
-      if (await fs.pathExists(sessionsPath)) {
-        const sessionDirs = await fs.readdir(sessionsPath);
-        for (const dir of sessionDirs) {
-          if (dir.includes(userId.toString())) {
-            await fs.remove(path.join(sessionsPath, dir));
-          }
-        }
-      }
+      // NETTOYAGE COMPLET avant de commencer
+      await this.forceCleanupSessions(userId);
       
-      // Recréer le dossier d'authentification
+      const pairingAuthPath = path.join(process.cwd(), this.sessionName);
       await fs.ensureDir(pairingAuthPath);
-    } catch (cleanupError) {
-      log.warn(`⚠️ Erreur nettoyage sessions: ${cleanupError.message}`);
-    }
-    
-    const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
-    
-    try {
+      
+      const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
+      
       const socket = makeWASocket({
-        logger: pino({ level: "silent" }),
+        logger: pino({ level: "fatal" }),
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
         syncFullHistory: false,
-        markOnlineOnConnect: false,
+        markOnlineOnConnect: true,
         printQRInTerminal: false,
-        
-        // CONFIGURATION CRITIQUE POUR LA STABILITÉ
-        connectTimeoutMs: 60000,
+        connectTimeoutMs: 120000,
         defaultQueryTimeoutMs: 30000,
-        keepAliveIntervalMs: 15000,
-        retryRequestDelayMs: 2000,
+        keepAliveIntervalMs: 10000,
+        retryRequestDelayMs: 3000,
         maxRetries: 2,
-        
-        // OPTIMISATIONS DE STABILITÉ
-        emitOwnEvents: true,
-        generateHighQualityLinkPreview: false,
         fireInitQueries: true,
         mobile: false,
-        
-        // CONFIGURATION RÉSEAU AMÉLIORÉE
-        txnTimeoutMs: 10000,
-        qrTimeout: 60000,
-        
-        // OPTIMISATION MÉMOIRE
-        msgRetryCounterCache: new Map(),
-        messageResendCache: new Map(),
-        
-        getMessage: async () => undefined,
-        
-        // DÉSACTIVER LES FONCTIONNALITÉS NON ESSENTIELLES
-        shouldIgnoreJid: (jid) => jid.endsWith('@broadcast'),
-        linkPreviewImageThumbnailWidth: 64,
-        
-        // CONFIGURATION WEBSOCKET AMÉLIORÉE
-        wsOptions: {
-          headers: {
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'no-cache',
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-          }
-        }
+        appStateMacVerification: {
+          patch: true,
+          snapshot: true
+        },
+        getMessage: async () => undefined
       });
 
-      // VARIABLES DE CONTRÔLE
-      let pairingCodeSent = false;
       let pairingSuccess = false;
-      let pairingCode = null;
-      let codeGenerationInProgress = false;
       
-      const currentRetryCount = this.retryCounts.get(userId) || 0;
+      // GÉNÉRATION IMMÉDIATE DU CODE
+      await delay(2000);
       
-      // FONCTION AMÉLIORÉE DE GÉNÉRATION DE CODE
-      const generatePairingCode = async () => {
-        if (codeGenerationInProgress || pairingCodeSent) {
-          log.info(`⏳ Génération de code déjà en cours ou code déjà envoyé pour ${userId}`);
-          return;
+      let pairingCode;
+      try {
+        pairingCode = await socket.requestPairingCode(phoneNumber);
+        pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
+        
+        if (!pairingCode) {
+          throw new Error('Aucun code pairing généré');
         }
         
-        codeGenerationInProgress = true;
+        log.success(`🔑 Code pairing généré: ${pairingCode}`);
         
-        try {
-          log.info(`📱 Génération du code pairing pour le numéro: ${phoneNumber}`);
-          
-          // AJOUTER UN TIMEOUT POUR LA GÉNÉRATION DU CODE
-          const pairingPromise = socket.requestPairingCode(phoneNumber);
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Timeout génération code pairing')), 30000)
-          );
-          
-          pairingCode = await Promise.race([pairingPromise, timeoutPromise]);
-          pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
-          
-          if (!pairingCode) {
-            throw new Error('Aucun code pairing généré');
-          }
-          
-          log.success(`🔑 Code de pairing généré pour ${userId}: ${pairingCode}`);
-          
-          const sent = await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
-          if (sent) {
-            pairingCodeSent = true;
-            
-            const connectionTimeout = setTimeout(async () => {
-              if (!pairingSuccess) {
-                log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
-                await this.sendMessageViaHTTP(userId,
-                  "⏰ *Code de pairing expiré*\n\n" +
-                  "Le code n'a pas été utilisé dans les 15 minutes.\n\n" +
-                  "*Que faire?*\n" +
-                  "• Redémarrez avec /connect\n" +
-                  "• Utilisez la méthode **QR Code**\n" +
-                  "• Le QR Code est souvent plus rapide et stable"
-                );
-                await this.cleanupPairing(userId);
-              }
-            }, 900000);
+      } catch (codeError) {
+        log.error(`❌ Erreur génération code: ${codeError.message}`);
+        throw new Error(`Impossible de générer le code pairing: ${codeError.message}`);
+      }
 
-            this.connectionTimeouts.set(userId, connectionTimeout);
-            log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
-          } else {
-            throw new Error('Échec envoi du code pairing');
-          }
-        } catch (error) {
-          log.error('❌ Erreur génération code pairing:', error);
-          codeGenerationInProgress = false;
-          
-          const retryCount = currentRetryCount + 1;
-          this.retryCounts.set(userId, retryCount);
-          
-          if (retryCount < 2) {
-            log.info(`🔄 Tentative ${retryCount}/2 de pairing pour ${userId}`);
-            await this.sendMessageViaHTTP(userId,
-              `🔄 *Tentative ${retryCount}/2 en cours...*\n\n` +
-              `Problème temporaire. Nouvelle tentative automatique...`
-            );
-            
-            setTimeout(() => {
-              this.startPairingWithPhone(userId, userData, phoneNumber);
-            }, 10000);
-            return;
-          }
-          
-          await this.sendMessageViaHTTP(userId, 
-            "❌ *Impossible de se connecter via Pairing*\n\n" +
-            "Le service WhatsApp rencontre des difficultés techniques.\n\n" +
-            "🎯 *Solution recommandée:*\n" +
-            "Utilisez la méthode **QR Code** à la place:\n" +
-            "1. Allez dans /connect\n" + 
-            "2. Choisissez 'QR Code'\n" +
-            "3. Scannez le QR avec WhatsApp\n\n" +
-            "Le QR Code est généralement plus rapide et fiable!"
-          );
-          
-          await this.cleanupPairing(userId);
-        }
-      };
+      // ENVOI DU CODE
+      const sent = await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
+      if (!sent) {
+        throw new Error('Échec envoi du code pairing');
+      }
 
-      // DÉMARRER LA GÉNÉRATION APRÈS UN DÉLAI CONTRÔLÉ
-      const pairingTimeout = setTimeout(() => {
-        if (!pairingCodeSent && !codeGenerationInProgress) {
-          generatePairingCode();
-        }
-      }, 5000);
+      await this.sendMessageViaHTTP(userId,
+        `🔐 *Code de Pairing Généré!*\n\n` +
+        `📱 Pour: ${phoneNumber}\n` +
+        `🔑 Votre code: *${pairingCode}*\n\n` +
+        `*Instructions CRITIQUES:*\n` +
+        `1. Ouvrez WhatsApp MAINTENANT\n` +
+        `2. Paramètres → Appareils liés\n` +
+        `3. "Lier un appareil"\n` +
+        `4. Entrez le code *IMMÉDIATEMENT*\n` +
+        `5. Ne quittez pas cette conversation\n\n` +
+        `⏱️ *Code valable 3 minutes*`
+      );
 
-      this.pairingTimeouts.set(userId, pairingTimeout);
-
-      // GESTION AMÉLIORÉE DES ÉVÉNEMENTS DE CONNEXION
+      // CONFIGURATION DES ÉVÉNEMENTS
       socket.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr, isNewLogin } = update;
+        const { connection, lastDisconnect, qr } = update;
         
-        const connectionInfo = { 
-          connection, 
-          hasQR: !!qr,
-          isNewLogin,
-          error: lastDisconnect?.error?.message,
-          statusCode: lastDisconnect?.error?.output?.statusCode
-        };
+        log.info(`🔌 [PAIRING] ${userId} - Connection: ${connection}, QR: ${!!qr}`);
         
-        log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
-
         if (qr) {
-          log.info(`⚠️ QR ignoré pour ${userId} (mode pairing actif)`);
-          
-          if (!pairingCodeSent && !codeGenerationInProgress) {
-            log.info(`🔄 QR détecté, déclenchement génération code pairing...`);
-            setTimeout(() => generatePairingCode(), 2000);
-          }
+          log.warn(`⚠️ QR reçu - pairing peut échouer pour ${userId}`);
           return;
         }
         
         if (connection === "open") {
-          this.cleanupUserTimeouts(userId);
           pairingSuccess = true;
-          codeGenerationInProgress = false;
+          log.success(`🎉 CONNEXION RÉUSSIE pairing pour ${userId}`);
           
-          log.success(`🎉 CONNEXION RÉUSSIE via pairing pour ${userId}`);
-          
-          // ATTENDRE que la connexion soit stable
-          await delay(3000);
+          await delay(1000);
           
           await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
           
         } else if (connection === "close") {
-          const reason = lastDisconnect?.error;
-          const statusCode = reason?.output?.statusCode;
-          
-          log.error(`❌ Connexion fermée pour ${userId}:`, {
-            message: reason?.message,
-            statusCode: statusCode,
-            pairingCode: pairingCode
-          });
-          
-          // GESTION DES ERREURS DE STREAM
-          if (reason?.message?.includes('Stream Errored') || statusCode === 515) {
-            const recoveryInProgress = await this.handleStreamError(userId, reason, phoneNumber);
-            if (recoveryInProgress) {
-              return;
-            }
-          }
+          log.error(`❌ Connexion fermée: ${lastDisconnect?.error?.message}`);
           
           if (!pairingSuccess) {
-            let errorMessage = "❌ *Échec de connexion pairing*\n\n";
-            
-            if (statusCode === 515 || reason?.message?.includes('Stream Errored')) {
-              errorMessage += "⚠️ *Problème de connexion réseau*\n\n";
-              errorMessage += "WhatsApp a rencontré un problème technique.\n\n";
-              errorMessage += "*Solutions recommandées:*\n";
-              errorMessage += "• Utilisez la méthode **QR Code** (plus stable)\n";
-              errorMessage += "• Réessayez dans 2-3 minutes\n";
-              errorMessage += "• Vérifiez votre connexion Internet\n";
-            } else if (statusCode === 401) {
-              errorMessage += "🔑 *Code de pairing expiré ou invalide*\n\n";
-              errorMessage += "Le code a expiré ou a déjà été utilisé.\n\n";
-              errorMessage += "*Solution:*\n";
-              errorMessage += "• Redémarrez avec /connect\n";
-              errorMessage += "• Générez un nouveau code\n";
-            } else {
-              errorMessage += "❌ *Erreur de connexion inattendue*\n\n";
-              errorMessage += "Problème technique avec WhatsApp.\n\n";
-              errorMessage += "*Solution:*\n";
-              errorMessage += "• Utilisez la méthode QR Code\n";
-              errorMessage += "• Réessayez plus tard\n";
-            }
-            
-            await this.sendMessageViaHTTP(userId, errorMessage);
+            await this.sendMessageViaHTTP(userId,
+              "❌ *Échec connexion pairing*\n\n" +
+              "Le code n'a pas fonctionné.\n\n" +
+              "Causes:\n" +
+              "• Code expiré (trop lent)\n" + 
+              "• Numéro incorrect\n" +
+              "• Problème WhatsApp\n\n" +
+              "🎯 *Solution:*\n" +
+              "Utilisez la méthode *QR Code* → plus fiable"
+            );
           }
           
-          this.cleanupUserTimeouts(userId);
           await this.cleanupPairing(userId);
-        } else if (connection === "connecting") {
-          log.info(`🔄 Connexion en cours pour ${userId}...`);
         }
       });
 
       socket.ev.on("creds.update", saveCreds);
 
-      this.activePairings.set(userId, { 
-        socket, 
-        rl: null, 
-        userData, 
-        phoneNumber,
-        pairingCodeSent,
-        codeGenerationInProgress 
-      });
+      // TIMEOUT DE SÉCURITÉ
+      const safetyTimeout = setTimeout(async () => {
+        if (!pairingSuccess) {
+          log.warn(`⏰ Timeout pairing pour ${userId}`);
+          await this.sendMessageViaHTTP(userId,
+            "⏰ *Temps écoulé*\n\n" +
+            "Le code pairing a expiré.\n\n" +
+            "Veuillez:\n" +
+            "1. Redémarrer avec /connect\n" + 
+            "2. Choisir *QR Code*\n" +
+            "3. Scanner rapidement\n\n" +
+            "Le QR Code est plus rapide et fiable! 📱"
+          );
+          await this.cleanupPairing(userId);
+        }
+      }, 180000);
+
+      this.connectionTimeouts.set(userId, safetyTimeout);
+      this.activePairings.set(userId, { socket, userData, phoneNumber });
 
       return { 
         success: true, 
-        method: 'pairing', 
-        message: 'Processus pairing démarré',
-        phoneNumber: phoneNumber,
-        retryCount: currentRetryCount
+        method: 'pairing',
+        pairingCode: pairingCode,
+        message: 'Code pairing envoyé - utilisez-le rapidement'
       };
 
     } catch (error) {
-      log.error('❌ Erreur critique processus pairing:', error);
+      log.error(`❌ ERREUR CRITIQUE pairing: ${error.message}`);
       
       await this.cleanupPairing(userId);
       
       await this.sendMessageViaHTTP(userId,
-        "❌ *Erreur critique de connexion*\n\n" +
-        "Impossible d'établir la connexion avec WhatsApp.\n\n" +
-        "Veuillez:\n" +
-        "• Utiliser la méthode QR Code\n" +
-        "• Réessayer plus tard\n" +
-        "• Contacter le support si le problème persiste"
+        "❌ *Erreur pairing*\n\n" +
+        "Impossible de générer le code.\n\n" +
+        "Utilisez la méthode *QR Code* à la place:\n" +
+        "1. /connect\n" +
+        "2. QR Code\n" +
+        "3. Scanner avec WhatsApp\n\n" +
+        "✅ Plus rapide et fiable!"
       );
       
       throw error;
     }
   }
 
-  async handleStreamError(userId, error, phoneNumber) {
-    try {
-      log.error(`🌊 Erreur stream pour ${userId}:`, error.message);
-      
-      // Analyser le type d'erreur
-      if (error.message.includes('Stream Errored') || error.message.includes('restart required')) {
-        log.info(`🔄 Stream error détecté - tentative de récupération...`);
-        
-        // Attendre un moment avant de réessayer
-        await delay(5000);
-        
-        // Nettoyer complètement avant de recommencer
-        await this.forceCleanupSessions(userId);
-        
-        // Réessayer avec une nouvelle session
-        const retryCount = this.retryCounts.get(userId) || 0;
-        if (retryCount < 2) {
-          this.retryCounts.set(userId, retryCount + 1);
-          
-          log.info(`🔄 Tentative de récupération ${retryCount + 1}/2 pour ${userId}`);
-          
-          await this.sendMessageViaHTTP(userId,
-            `🔄 *Problème de connexion détecté*\n\n` +
-            `Réparation automatique en cours...\n` +
-            `Tentative ${retryCount + 1}/2`
-          );
-          
-          // Relancer le processus avec un délai
-          setTimeout(async () => {
-            try {
-              await this.startPairingWithPhone(userId, {}, phoneNumber);
-            } catch (retryError) {
-              log.error(`❌ Échec récupération pour ${userId}:`, retryError);
-            }
-          }, 8000);
-          
-          return true;
-        }
-      }
-      
-      return false;
-      
-    } catch (handleError) {
-      log.error(`❌ Erreur gestion stream error:`, handleError);
-      return false;
-    }
-  }
-
-  async recommendQRCode(userId) {
-    await this.sendMessageViaHTTP(userId,
-      "💡 *Conseil NOVA-MD*\n\n" +
-      "La méthode **QR Code** est souvent plus rapide et stable que le Pairing Code.\n\n" +
-      "*Avantages du QR Code:*\n" +
-      "• Connexion instantanée\n" + 
-      "• Plus fiable\n" +
-      "• Moins de problèmes techniques\n" +
-      "• Supporté par tous les devices\n\n" +
-      "Essayez la méthode QR Code avec /connect !"
-    );
-  }
-
   async handleSuccessfulPairing(socket, userId, userData, saveCreds, rl) {
     try {
-      const sessionId = `pairing_${userId}_${Date.now()}`;
-      const authDir = path.join(process.cwd(), 'sessions', sessionId);
-      
-      await fs.ensureDir(authDir);
+        const sessionId = `pairing_${userId}_${Date.now()}`;
+        const authDir = path.join(process.cwd(), 'sessions', sessionId);
+        
+        await fs.ensureDir(authDir);
 
-      const pairingAuthPath = path.join(process.cwd(), this.sessionName);
-      
-      if (await fs.pathExists(pairingAuthPath)) {
-        const files = await fs.readdir(pairingAuthPath);
-        for (const file of files) {
-          const sourcePath = path.join(pairingAuthPath, file);
-          const targetPath = path.join(authDir, file);
-          await fs.copy(sourcePath, targetPath);
-        }
-        log.info(`✅ Fichiers d'authentification copiés vers ${authDir}`);
-      }
-
-      const access = await this.sessionManager.authManager.checkUserAccess(userId);
-      const isPayedUser = access.hasAccess;
-
-      // CRÉATION COMPLÈTE DE LA SESSION
-      const sessionData = {
-        socket: socket,
-        userId: userId,
-        userData: userData,
-        authDir: authDir,
-        saveCreds: saveCreds,
-        status: 'connected',
-        subscriptionActive: isPayedUser,
-        connectionMethod: 'pairing',
-        createdAt: new Date(),
-        lastActivity: new Date()
-      };
-
-      // AJOUTER LA SESSION AU SESSION MANAGER
-      this.sessionManager.sessions.set(sessionId, sessionData);
-
-      // CONFIGURER LES ÉVÉNEMENTS DU SOCKET COMPLÈTEMENT
-      this.setupCompleteSocketEvents(socket, sessionId, userId);
-
-      await this.sessionManager.supabase
-        .from('whatsapp_sessions')
-        .insert([{
-          session_id: sessionId,
-          user_id: userId,
-          user_data: userData,
-          status: 'connected',
-          subscription_active: isPayedUser,
-          connection_method: 'pairing',
-          created_at: new Date().toISOString(),
-          connected_at: new Date().toISOString(),
-          last_activity: new Date().toISOString()
-        }]);
-
-      // Nettoyer
-      this.retryCounts.delete(userId);
-      this.activePairings.delete(userId);
-      if (rl) rl.close();
-
-      // Message de bienvenue sur WhatsApp
-      let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\n\n`;
-      whatsappMessage += `✅ Méthode: Code de Pairing\n`;
-      whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id || 'Utilisateur'}\n`;
-      
-      if (isPayedUser) {
-        whatsappMessage += `📱 Statut: Session PERMANENTE\n\n`;
-        whatsappMessage += `💎 *ABONNEMENT ACTIF*\n`;
-        whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\n`;
-        whatsappMessage += `🔐 Session maintenue automatiquement\n\n`;
-      } else {
-        whatsappMessage += `📱 Statut: Session d'essai\n\n`;
-      }
-      
-      whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\n`;
-      whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
-
-      try {
-        // ENVOYER le message sur WhatsApp
-        if (socket.user && socket.user.id) {
-          await socket.sendMessage(socket.user.id, { text: whatsappMessage });
-          log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
-        } else {
-          log.warn(`⚠️ Impossible d'envoyer le message WhatsApp: user.id non défini`);
-        }
-      } catch (whatsappError) {
-        log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
-      }
-
-      // Message sur Telegram
-      await this.sendMessageViaHTTP(userId, 
-        `✅ *Connexion WhatsApp réussie via Pairing!*\n\n` +
-        `Votre session est maintenant active.\n` +
-        `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
-      );
-
-      log.success(`🎯 Session pairing créée: ${sessionId}`);
-
-    } catch (error) {
-      log.error('❌ Erreur gestion pairing réussi:', error);
-      if (rl) rl.close();
-    }
-  }
-
-  async forceCleanupSessions(userId) {
-    try {
-      log.info(`🧹 Nettoyage forcé des sessions pour ${userId}`);
-      
-      const sessionsToClean = [
-        path.join(process.cwd(), this.sessionName),
-        path.join(process.cwd(), 'sessions', `pairing_${userId}_*`),
-        path.join(process.cwd(), 'sessions', `qr_${userId}_*`)
-      ];
-      
-      for (const sessionPath of sessionsToClean) {
-        try {
-          if (await fs.pathExists(sessionPath)) {
-            await fs.remove(sessionPath);
-            log.success(`✅ Session nettoyée: ${sessionPath}`);
-          }
-        } catch (error) {
-          log.warn(`⚠️ Impossible de nettoyer ${sessionPath}: ${error.message}`);
-        }
-      }
-      
-      // Nettoyer également les sessions actives
-      for (const [sessionId, sessionData] of this.sessionManager.sessions) {
-        if (sessionData.userId === userId) {
-          try {
-            if (sessionData.socket) {
-              await sessionData.socket.end();
+        const pairingAuthPath = path.join(process.cwd(), this.sessionName);
+        
+        if (await fs.pathExists(pairingAuthPath)) {
+            const files = await fs.readdir(pairingAuthPath);
+            for (const file of files) {
+                const sourcePath = path.join(pairingAuthPath, file);
+                const targetPath = path.join(authDir, file);
+                await fs.copy(sourcePath, targetPath);
             }
-            this.sessionManager.sessions.delete(sessionId);
-          } catch (error) {
-            log.warn(`⚠️ Erreur nettoyage session ${sessionId}: ${error.message}`);
-          }
+            log.info(`✅ Fichiers d'authentification copiés vers ${authDir}`);
         }
-      }
-      
-      // Nettoyer les pairings actifs
-      this.cleanupPairing(userId);
-      
+
+        const access = await this.sessionManager.authManager.checkUserAccess(userId);
+        const isPayedUser = access.hasAccess;
+
+        // CRÉATION COMPLÈTE DE LA SESSION
+        const sessionData = {
+            socket: socket,
+            userId: userId,
+            userData: userData,
+            authDir: authDir,
+            saveCreds: saveCreds,
+            status: 'connected',
+            subscriptionActive: isPayedUser,
+            connectionMethod: 'pairing',
+            createdAt: new Date(),
+            lastActivity: new Date()
+        };
+
+        // AJOUTER LA SESSION AU SESSION MANAGER
+        this.sessionManager.sessions.set(sessionId, sessionData);
+
+        // CONFIGURER LES ÉVÉNEMENTS DU SOCKET
+        this.setupCompleteSocketEvents(socket, sessionId, userId);
+
+        await this.sessionManager.supabase
+            .from('whatsapp_sessions')
+            .insert([{
+                session_id: sessionId,
+                user_id: userId,
+                user_data: userData,
+                status: 'connected',
+                subscription_active: isPayedUser,
+                connection_method: 'pairing',
+                created_at: new Date().toISOString(),
+                connected_at: new Date().toISOString(),
+                last_activity: new Date().toISOString()
+            }]);
+
+        // Nettoyer
+        this.retryCounts.delete(userId);
+        this.activePairings.delete(userId);
+        if (rl) rl.close();
+
+        // Message de bienvenue sur WhatsApp
+        let whatsappMessage = `🎉 *CONNEXION WHATSAPP RÉUSSIE!*\\n\\n`;
+        whatsappMessage += `✅ Méthode: Code de Pairing\\n`;
+        whatsappMessage += `👤 Compte: ${socket.user?.name || socket.user?.id || 'Utilisateur'}\\n`;
+        
+        if (isPayedUser) {
+            whatsappMessage += `📱 Statut: Session PERMANENTE\\n\\n`;
+            whatsappMessage += `💎 *ABONNEMENT ACTIF*\\n`;
+            whatsappMessage += `📅 Jours restants: ${access.daysLeft || '30'}\\n`;
+            whatsappMessage += `🔐 Session maintenue automatiquement\\n\\n`;
+        } else {
+            whatsappMessage += `📱 Statut: Session d'essai\\n\\n`;
+        }
+        
+        whatsappMessage += `🤖 *Votre bot NOVA-MD est maintenant opérationnel!*\\n`;
+        whatsappMessage += `Utilisez *!help* pour voir les commandes disponibles.`;
+
+        try {
+            // ENVOYER le message sur WhatsApp
+            if (socket.user && socket.user.id) {
+                await socket.sendMessage(socket.user.id, { text: whatsappMessage });
+                log.success(`✅ Message de bienvenue envoyé sur WhatsApp à ${userId}`);
+            } else {
+                log.warn(`⚠️ Impossible d'envoyer le message WhatsApp: user.id non défini`);
+            }
+        } catch (whatsappError) {
+            log.error(`❌ Erreur envoi message WhatsApp: ${whatsappError.message}`);
+        }
+
+        // Message sur Telegram
+        await this.sendMessageViaHTTP(userId, 
+            `✅ *Connexion WhatsApp réussie via Pairing!*\\n\\n` +
+            `Votre session est maintenant active.\\n` +
+            `Allez sur WhatsApp et tapez *!help* pour voir les commandes.`
+        );
+
+        log.success(`🎯 Session pairing créée: ${sessionId}`);
+
     } catch (error) {
-      log.error(`❌ Erreur nettoyage forcé sessions: ${error.message}`);
+        log.error('❌ Erreur gestion pairing réussi:', error);
+        if (rl) rl.close();
     }
   }
 
-  // CONFIGURATION COMPLÈTE DES ÉVÉNEMENTS DU SOCKET
+  // CONFIGURATION COMPLÈTE DES ÉVÉNEMENTS SOCKET
   setupCompleteSocketEvents(socket, sessionId, userId) {
     const sessionManager = this.sessionManager;
     
     // Événement de mise à jour de connexion
     socket.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      
-      if (connection === "open") {
-        log.success(`✅ Connexion WhatsApp maintenue pour ${userId}`);
-        await sessionManager.updateSessionStatus(sessionId, 'connected');
-      }
-      
-      if (connection === "close") {
-        log.warn(`🔌 Connexion fermée pour ${userId}`);
-        await sessionManager.handleConnectionClose(sessionId, lastDisconnect);
-      }
+        const { connection, lastDisconnect, qr } = update;
+        
+        if (connection === "open") {
+            log.success(`✅ Connexion WhatsApp maintenue pour ${userId}`);
+            await sessionManager.updateSessionStatus(sessionId, 'connected');
+        }
+        
+        if (connection === "close") {
+            log.warn(`🔌 Connexion fermée pour ${userId}`);
+            await sessionManager.handleConnectionClose(sessionId, lastDisconnect);
+        }
     });
 
     // Événement de mise à jour des credentials
     socket.ev.on("creds.update", async (creds) => {
-      const session = sessionManager.sessions.get(sessionId);
-      if (session && session.saveCreds) {
-        await session.saveCreds();
-      }
-      await sessionManager.updateSessionActivity(sessionId);
+        const session = sessionManager.sessions.get(sessionId);
+        if (session && session.saveCreds) {
+            await session.saveCreds();
+        }
+        await sessionManager.updateSessionActivity(sessionId);
     });
 
     // Événement de réception de messages
     socket.ev.on("messages.upsert", async (m) => {
-      log.info(`📨 Message reçu pour ${userId}: ${m.messages?.length} messages`);
-      await sessionManager.handleIncomingMessage(m, sessionId);
+        log.info(`📨 Message reçu pour ${userId}: ${m.messages?.length} messages`);
+        await sessionManager.handleIncomingMessage(m, sessionId);
     });
 
     // Événement de mise à jour de messages
     socket.ev.on("messages.update", async (updates) => {
-      await sessionManager.updateSessionActivity(sessionId);
+        await sessionManager.updateSessionActivity(sessionId);
     });
 
     // Événement de mise à jour des contacts
     socket.ev.on("contacts.update", async (updates) => {
-      await sessionManager.updateSessionActivity(sessionId);
+        await sessionManager.updateSessionActivity(sessionId);
     });
 
     // Événement de mise à jour des groupes
     socket.ev.on("groups.update", async (updates) => {
-      await sessionManager.updateSessionActivity(sessionId);
+        await sessionManager.updateSessionActivity(sessionId);
     });
 
     // Traitement des autres événements
     socket.ev.process(async (events) => {
-      if (events['messaging-history.set']) {
-        log.info(`📚 Historique des messages chargé pour ${userId}`);
-      }
-      
-      if (events['chats.upsert']) {
-        await sessionManager.updateSessionActivity(sessionId);
-      }
-      
-      if (events['presence.update']) {
-        // Ignorer les mises à jour de présence
-      }
+        if (events['messaging-history.set']) {
+            log.info(`📚 Historique des messages chargé pour ${userId}`);
+        }
+        
+        if (events['chats.upsert']) {
+            await sessionManager.updateSessionActivity(sessionId);
+        }
+        
+        if (events['presence.update']) {
+            // Ignorer les mises à jour de présence
+        }
     });
   }
 
@@ -881,40 +632,61 @@ class PairingManager {
 
   async cleanupPairing(userId) {
     try {
-      log.info(`🧹 Nettoyage complet du pairing pour ${userId}`);
-      
-      // Nettoyer tous les timeouts
       this.cleanupUserTimeouts(userId);
       
-      // Nettoyer les compteurs de tentative
-      this.retryCounts.delete(userId);
-      
-      // Fermer le socket s'il existe
       const pairing = this.activePairings.get(userId);
-      if (pairing) {
-        if (pairing.socket) {
-          try {
-            await pairing.socket.end();
-            log.info(`🔌 Socket fermé pour ${userId}`);
-          } catch (socketError) {
-            log.warn(`⚠️ Erreur fermeture socket: ${socketError.message}`);
+      if (pairing && pairing.socket) {
+        await pairing.socket.end();
+      }
+      this.activePairings.delete(userId);
+      this.retryCounts.delete(userId);
+      await this.cleanup();
+      log.info(`🧹 Pairing nettoyé pour ${userId}`);
+    } catch (error) {
+      log.error(`❌ Erreur nettoyage pairing ${userId}:`, error);
+    }
+  }
+
+  async forceCleanupSessions(userId) {
+    try {
+      log.info(`🧹 Nettoyage forcé des sessions pour ${userId}`);
+      
+      const sessionsToClean = [
+        path.join(process.cwd(), this.sessionName),
+        path.join(process.cwd(), 'sessions', `pairing_${userId}_*`),
+        path.join(process.cwd(), 'sessions', `qr_${userId}_*`)
+      ];
+      
+      for (const sessionPath of sessionsToClean) {
+        try {
+          if (await fs.pathExists(sessionPath)) {
+            await fs.remove(sessionPath);
+            log.success(`✅ Session nettoyée: ${sessionPath}`);
           }
-        }
-        
-        if (pairing.rl) {
-          pairing.rl.close();
+        } catch (error) {
+          log.warn(`⚠️ Impossible de nettoyer ${sessionPath}: ${error.message}`);
         }
       }
       
-      // Supprimer de la map active
-      this.activePairings.delete(userId);
+      // Nettoyer également les sessions actives
+      for (const [sessionId, sessionData] of this.sessionManager.sessions) {
+        if (sessionData.userId === userId) {
+          try {
+            if (sessionData.socket) {
+              await sessionData.socket.end();
+            }
+            this.sessionManager.sessions.delete(sessionId);
+          } catch (error) {
+            log.warn(`⚠️ Erreur nettoyage session ${sessionId}: ${error.message}`);
+          }
+        }
+      }
       
-      // Nettoyer les fichiers temporaires
-      await this.cleanup();
+      // Nettoyer les pairings actifs
+      this.cleanupPairing(userId);
       
-      log.success(`✅ Pairing complètement nettoyé pour ${userId}`);
     } catch (error) {
-      log.error(`❌ Erreur nettoyage pairing ${userId}:`, error);
+      log.error(`❌ Erreur nettoyage forcé sessions: ${error.message}`);
     }
   }
 

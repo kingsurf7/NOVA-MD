@@ -129,262 +129,283 @@ class PairingManager {
     }
   }
 
-  async startPairingWithPhone(userId, userData, phoneNumber) {
-     
-    // NETTOYER COMPLÈTEMENT les sessions existantes
-    const pairingAuthPath = path.join(process.cwd(), this.sessionName);
-    const sessionsPath = path.join(process.cwd(), 'sessions'); 
-    
-    try {
-        // Supprimer complètement les dossiers de session existants
-        if (await fs.pathExists(pairingAuthPath)) {
-            await fs.remove(pairingAuthPath);
-        }
-        
-        // Nettoyer les anciennes sessions pour cet utilisateur
-        if (await fs.pathExists(sessionsPath)) {
-            const sessionDirs = await fs.readdir(sessionsPath);
-            for (const dir of sessionDirs) {
-                if (dir.includes(userId.toString())) {
-                    await fs.remove(path.join(sessionsPath, dir));
-                }
-            }
-        }
-        
-        // Recréer le dossier d'authentification
-        await fs.ensureDir(pairingAuthPath);
-        } catch (cleanupError) {
-        log.warn(`⚠️ Erreur nettoyage sessions: ${cleanupError.message}`);
+              
+   async startPairingWithPhone(userId, userData, phoneNumber) {
+  // NETTOYER COMPLÈTEMENT les sessions existantes
+  const pairingAuthPath = path.join(process.cwd(), this.sessionName);
+  const sessionsPath = path.join(process.cwd(), 'sessions'); 
+  
+  try {
+    // Supprimer complètement les dossiers de session existants
+    if (await fs.pathExists(pairingAuthPath)) {
+      await fs.remove(pairingAuthPath);
     }
     
-    const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
-    
-    try {
-      const socket = makeWASocket({
-        logger: pino({ level: "silent" }),
-        browser: Browsers.ubuntu('Chrome'),
-        auth: state,
-        syncFullHistory: false,
-        markOnlineOnConnect: false,
-        printQRInTerminal: false,
-        connectTimeoutMs: 360000,
-        defaultQueryTimeoutMs: 120000,
-        keepAliveIntervalMs: 30000,
-        retryRequestDelayMs: 5000,
-        maxRetries:3,
-        generateHighQualityLinkPreview: false, 
-        mobile: false,
-        getMessage: async () => undefined, 
-        msgRetryCounterCache: new Map(),
-        messageResendCache: new Map() 
-      });
-
-      let pairingCodeSent = false;
-      let pairingSuccess = false;
-      let pairingCode = null;
-      
-      const currentRetryCount = this.retryCounts.get(userId) || 0;
-      
-      const pairingTimeout = setTimeout(async () => {
-        if (!pairingCodeSent && currentRetryCount < 3) {
-          try {
-            log.info(`📱 Génération du code pairing pour le numéro: ${phoneNumber}`);
-            
-            pairingCode = await socket.requestPairingCode(phoneNumber);
-            pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
-            
-            if (!pairingCode) {
-              throw new Error('Aucun code pairing généré');
-            }
-            
-            log.success(`🔑 Code de pairing généré pour ${userId}: ${pairingCode}`);
-            
-            const sent = await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
-            if (sent) {
-              pairingCodeSent = true;
-              
-              const connectionTimeout = setTimeout(async () => {
-                if (!pairingSuccess) {
-                  log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
-                  await this.sendMessageViaHTTP(userId,
-                    "⏰ *Timeout de connexion*\n\n" +
-                    "Le code de pairing n'a pas été utilisé dans les 10 minutes.\n\n" +
-                    "Le code a expiré. Veuillez:\n" +
-                    "1. Redémarrer le processus avec /connect\n" +
-                    "2. Choisir à nouveau 'Pairing Code'\n" +
-                    "3. Entrer votre numéro\n" +
-                    "4. Utiliser le nouveau code immédiatement\n\n" +
-                    "Ou utilisez la méthode QR Code pour une connexion plus rapide."
-                  );
-                  await this.cleanupPairing(userId);
-                }
-              }, 420000);
-
-              this.connectionTimeouts.set(userId, connectionTimeout);
-
-              log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
-              
-      
-              
-            } else {
-              throw new Error('Échec envoi du code pairing');
-            }
-
-          } catch (error) {
-            log.error('❌ Erreur génération code pairing:', error);
-            
-            const retryCount = currentRetryCount + 1;
-            this.retryCounts.set(userId, retryCount);
-            
-            if (retryCount < 3) {
-              log.info(`🔄 Tentative ${retryCount}/3 de pairing pour ${userId}`);
-              await this.sendMessageViaHTTP(userId,
-                `🔄 *Tentative ${retryCount}/3 en cours...*\n\n` +
-                `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`);
-              
-              setTimeout(() => {
-                this.startPairingWithPhone(userId, userData, phoneNumber);
-              }, 10000);
-              return;
-            }
-            
-            await this.sendMessageViaHTTP(userId, 
-              "❌ *Impossible de générer un code pairing*\n\n" +
-              "Après 3 tentatives, le service WhatsApp ne répond pas.\n\n" +
-              "Causes possibles:\n" +
-              "• Service WhatsApp temporairement saturé\n" +
-              "• Problème réseau avec les serveurs WhatsApp\n" +
-              "• Restrictions régionales temporaires\n\n" +
-              "Solutions recommandées:\n" +
-              "• Utilisez la méthode *QR Code* (plus stable)\n" +
-              "• Réessayez dans 10-15 minutes\n" +
-              "• Contactez le support si le problème persiste"
-            );
-            
-            await this.cleanupPairing(userId);
-          }
+    // Nettoyer les anciennes sessions pour cet utilisateur
+    if (await fs.pathExists(sessionsPath)) {
+      const sessionDirs = await fs.readdir(sessionsPath);
+      for (const dir of sessionDirs) {
+        if (dir.includes(userId.toString())) {
+          await fs.remove(path.join(sessionsPath, dir));
         }
-      }, 10000);
+      }
+    }
+    
+    // Recréer le dossier d'authentification
+    await fs.ensureDir(pairingAuthPath);
+  } catch (cleanupError) {
+    log.warn(`⚠️ Erreur nettoyage sessions: ${cleanupError.message}`);
+  }
+  
+  const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
+  
+  try {
+    const socket = makeWASocket({
+      logger: pino({ level: "silent" }),
+      browser: Browsers.ubuntu('Chrome'),
+      auth: state,
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+      printQRInTerminal: false,
+      connectTimeoutMs: 360000,
+      defaultQueryTimeoutMs: 120000,
+      keepAliveIntervalMs: 30000,
+      retryRequestDelayMs: 5000,
+      maxRetries: 3,
+      generateHighQualityLinkPreview: false, 
+      mobile: false,
+      getMessage: async () => undefined, 
+      msgRetryCounterCache: new Map(),
+      messageResendCache: new Map() 
+    });
 
-      this.pairingTimeouts.set(userId, pairingTimeout);
-
-      socket.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr, isNewLogin } = update;
+    // VARIABLES DE CONTRÔLE - AJOUT CRITIQUE
+    let pairingCodeSent = false;
+    let pairingSuccess = false;
+    let pairingCode = null;
+    let codeGenerationInProgress = false; // 🔥 NOUVEAU: empêche les générations multiples
+    
+    const currentRetryCount = this.retryCounts.get(userId) || 0;
+    
+    // 🔥 MODIFIER: Contrôler la génération du code
+    const generatePairingCode = async () => {
+      if (codeGenerationInProgress || pairingCodeSent) {
+        log.info(`⏳ Génération de code déjà en cours ou code déjà envoyé pour ${userId}`);
+        return;
+      }
+      
+      codeGenerationInProgress = true;
+      
+      try {
+        log.info(`📱 Génération du code pairing pour le numéro: ${phoneNumber}`);
         
-        const connectionInfo = { 
-          connection, 
-          hasQR: !!qr,
-          isNewLogin,
-          error: lastDisconnect?.error?.message,
-          statusCode: lastDisconnect?.error?.output?.statusCode
-        };
+        pairingCode = await socket.requestPairingCode(phoneNumber);
+        pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
         
-        log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
+        if (!pairingCode) {
+          throw new Error('Aucun code pairing généré');
+        }
+        
+        log.success(`🔑 Code de pairing généré pour ${userId}: ${pairingCode}`);
+        
+        const sent = await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
+        if (sent) {
+          pairingCodeSent = true;
+          
+          // 🔥 MODIFIER: Timeout de connexion plus long
+          const connectionTimeout = setTimeout(async () => {
+            if (!pairingSuccess) {
+              log.warn(`⏰ Timeout de connexion pairing pour ${userId}`);
+              await this.sendMessageViaHTTP(userId,
+                "⏰ *Timeout de connexion*\n\n" +
+                "Le code de pairing n'a pas été utilisé dans les 15 minutes.\n\n" +
+                "Le code a expiré. Veuillez:\n" +
+                "1. Redémarrer le processus avec /connect\n" +
+                "2. Choisir à nouveau 'Pairing Code'\n" +
+                "3. Entrer votre numéro\n" +
+                "4. Utiliser le nouveau code immédiatement\n\n" +
+                "Ou utilisez la méthode QR Code pour une connexion plus rapide."
+              );
+              await this.cleanupPairing(userId);
+            }
+          }, 900000); // 🔥 15 minutes au lieu de 7
 
-        if (qr) {
-          log.info(`⚠️ QR ignoré pour ${userId} (mode pairing actif)`);
+          this.connectionTimeouts.set(userId, connectionTimeout);
+          log.info(`✅ Code pairing ${pairingCode} envoyé à ${userId}`);
+        } else {
+          throw new Error('Échec envoi du code pairing');
+        }
+      } catch (error) {
+        log.error('❌ Erreur génération code pairing:', error);
+        codeGenerationInProgress = false; // 🔥 Réactiver en cas d'erreur
+        
+        const retryCount = currentRetryCount + 1;
+        this.retryCounts.set(userId, retryCount);
+        
+        if (retryCount < 3) {
+          log.info(`🔄 Tentative ${retryCount}/3 de pairing pour ${userId}`);
+          await this.sendMessageViaHTTP(userId,
+            `🔄 *Tentative ${retryCount}/3 en cours...*\n\n` +
+            `Problème temporaire avec WhatsApp. Nouvelle tentative automatique...`);
+          
+          setTimeout(() => {
+            this.startPairingWithPhone(userId, userData, phoneNumber);
+          }, 15000); // 🔥 Augmenter le délai entre les tentatives
           return;
         }
         
-        if (connection === "open") {
-          this.cleanupUserTimeouts(userId);
-          pairingSuccess = true;
-          log.success(`🎉 CONNEXION RÉUSSIE via pairing pour ${userId}`);
-          await delay(2000);
-          await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
-          
-        } else if (connection === "close") {
-          this.cleanupUserTimeouts(userId);
-          const reason = lastDisconnect?.error;
-          const statusCode = reason?.output?.statusCode;
-          
-          log.error(`❌ Connexion fermée pour ${userId}:`, {
-            message: reason?.message,
-            statusCode: statusCode,
-            pairingCode: pairingCode
-          });
-          
-          if (!pairingSuccess) {
-            let errorMessage = "❌ *Échec de connexion pairing*\n\n";
-            
-            if (statusCode === 515 || reason?.message?.includes('Stream Errored')) {
-              errorMessage += "Problème de connexion réseau avec WhatsApp.\n\n";
-              errorMessage += "C'est temporaire - souvent dû à:\n";
-              errorMessage += "• Surcharge des serveurs WhatsApp\n";
-              errorMessage += "• Problèmes réseau temporaires\n";
-              errorMessage += "• Maintenance des serveurs\n\n";
-              errorMessage += "🔄 *Reconnexion automatique en cours...*";
-              
-              const retryCount = currentRetryCount + 1;
-              if (retryCount < 2) {
-                this.retryCounts.set(userId, retryCount);
-                setTimeout(() => {
-                  log.info(`🔄 Reconnexion automatique ${retryCount}/2 pour ${userId}`);
-                  this.startPairingWithPhone(userId, userData, phoneNumber);
-                }, 10000);
-                return;
-              }
-            } else if (statusCode === 401) {
-              errorMessage += "Le code de pairing a expiré ou est invalide.\n";
-            } else if (reason?.message?.includes('refs attempts ended')) {
-              errorMessage += "Trop de tentatives. WhatsApp a bloqué temporairement.\n";
-            } else {
-              errorMessage += "Problème de connexion inattendu.\n";
-            }
-            
-            errorMessage += "\n🎯 *Solutions recommandées:*\n";
-            errorMessage += "• Utilisez la méthode *QR Code* (plus fiable)\n";
-            errorMessage += "• Réessayez dans 5-10 minutes\n";
-            errorMessage += "• Vérifiez votre connexion Internet\n";
-            errorMessage += "• Contactez le support si besoin";
-            
-            await this.sendMessageViaHTTP(userId, errorMessage);
-          }
-          
-          await this.cleanupPairing(userId);
-        } else if (connection === "connecting") {
-          log.info(`🔄 Connexion en cours pour ${userId}...`);
-        }
-      });
+        await this.sendMessageViaHTTP(userId, 
+          "❌ *Impossible de générer un code pairing*\n\n" +
+          "Après 3 tentatives, le service WhatsApp ne répond pas.\n\n" +
+          "Causes possibles:\n" +
+          "• Service WhatsApp temporairement saturé\n" +
+          "• Problème réseau avec les serveurs WhatsApp\n" +
+          "• Restrictions régionales temporaires\n\n" +
+          "Solutions recommandées:\n" +
+          "• Utilisez la méthode *QR Code* (plus stable)\n" +
+          "• Réessayez dans 10-15 minutes\n" +
+          "• Contactez le support si le problème persiste"
+        );
+        
+        await this.cleanupPairing(userId);
+      }
+    };
 
-      socket.ev.on("creds.update", saveCreds);
+    // 🔥 MODIFIER: Démarrer la génération après un délai contrôlé
+    const pairingTimeout = setTimeout(() => {
+      if (!pairingCodeSent && !codeGenerationInProgress) {
+        generatePairingCode();
+      }
+    }, 5000); // 🔥 Réduire le délai initial
 
-      socket.ev.process(async (events) => {
-        if (events['connection.update']) {
-          const update = events['connection.update'];
-          if (update.lastDisconnect?.error) {
-            log.warn(`⚠️ Erreur connexion ${userId}:`, update.lastDisconnect.error.message);
-          }
-        }
-      });
+    this.pairingTimeouts.set(userId, pairingTimeout);
 
-      this.activePairings.set(userId, { socket, rl: null, userData, phoneNumber });
-
-      return { 
-        success: true, 
-        method: 'pairing', 
-        message: 'Processus pairing démarré',
-        phoneNumber: phoneNumber,
-        retryCount: currentRetryCount
+    // GESTION DES ÉVÉNEMENTS DE CONNEXION
+    socket.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr, isNewLogin } = update;
+      
+      const connectionInfo = { 
+        connection, 
+        hasQR: !!qr,
+        isNewLogin,
+        error: lastDisconnect?.error?.message,
+        statusCode: lastDisconnect?.error?.output?.statusCode
       };
+      
+      log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
 
-    } catch (error) {
-      log.error('❌ Erreur critique processus pairing:', error);
+      if (qr) {
+        log.info(`⚠️ QR ignoré pour ${userId} (mode pairing actif)`);
+        
+        // 🔥 NOUVEAU: Générer le code pairing quand le QR apparaît
+        if (!pairingCodeSent && !codeGenerationInProgress) {
+          log.info(`🔄 QR détecté, déclenchement génération code pairing...`);
+          setTimeout(() => generatePairingCode(), 2000);
+        }
+        return;
+      }
       
-      await this.cleanupPairing(userId);
-      
-      await this.sendMessageViaHTTP(userId,
-        "❌ *Erreur critique de connexion*\n\n" +
-        "Impossible d'établir la connexion avec WhatsApp.\n\n" +
-        "Veuillez:\n" +
-        "• Utiliser la méthode QR Code\n" +
-        "• Réessayer plus tard\n" +
-        "• Contacter le support si le problème persiste"
-      );
-      
-      throw error;
-    }
+      if (connection === "open") {
+        // 🔥 NOUVEAU: Nettoyer immédiatement
+        this.cleanupUserTimeouts(userId);
+        pairingSuccess = true;
+        codeGenerationInProgress = false;
+        
+        log.success(`🎉 CONNEXION RÉUSSIE via pairing pour ${userId}`);
+        await delay(2000);
+        await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
+        
+      } else if (connection === "close") {
+        const reason = lastDisconnect?.error;
+        const statusCode = reason?.output?.statusCode;
+        
+        log.error(`❌ Connexion fermée pour ${userId}:`, {
+          message: reason?.message,
+          statusCode: statusCode,
+          pairingCode: pairingCode
+        });
+        
+        if (!pairingSuccess) {
+          let errorMessage = "❌ *Échec de connexion pairing*\n\n";
+          
+          if (statusCode === 515 || reason?.message?.includes('Stream Errored')) {
+            errorMessage += "Problème de connexion réseau avec WhatsApp.\n\n";
+            errorMessage += "C'est temporaire - souvent dû à:\n";
+            errorMessage += "• Surcharge des serveurs WhatsApp\n";
+            errorMessage += "• Problèmes réseau temporaires\n";
+            errorMessage += "• Maintenance des serveurs\n\n";
+            
+            const retryCount = currentRetryCount + 1;
+            if (retryCount < 2) {
+              errorMessage += "🔄 *Reconnexion automatique en cours...*";
+              this.retryCounts.set(userId, retryCount);
+              
+              // 🔥 MODIFIER: Nettoyer avant reconnexion
+              this.cleanupUserTimeouts(userId);
+              setTimeout(() => {
+                log.info(`🔄 Reconnexion automatique ${retryCount}/2 pour ${userId}`);
+                this.startPairingWithPhone(userId, userData, phoneNumber);
+              }, 10000);
+              
+              await this.sendMessageViaHTTP(userId, errorMessage);
+              return;
+            }
+          }
+          
+          errorMessage += "\n🎯 *Solutions recommandées:*\n";
+          errorMessage += "• Utilisez la méthode *QR Code* (plus fiable)\n";
+          errorMessage += "• Réessayez dans 5-10 minutes\n";
+          errorMessage += "• Vérifiez votre connexion Internet\n";
+          errorMessage += "• Contactez le support si besoin";
+          
+          await this.sendMessageViaHTTP(userId, errorMessage);
+        }
+        
+        // 🔥 NOUVEAU: Nettoyer complètement
+        this.cleanupUserTimeouts(userId);
+        await this.cleanupPairing(userId);
+      } else if (connection === "connecting") {
+        log.info(`🔄 Connexion en cours pour ${userId}...`);
+      }
+    });
+
+    socket.ev.on("creds.update", saveCreds);
+
+    this.activePairings.set(userId, { 
+      socket, 
+      rl: null, 
+      userData, 
+      phoneNumber,
+      pairingCodeSent, // 🔥 NOUVEAU: Suivi de l'état
+      codeGenerationInProgress 
+    });
+
+    return { 
+      success: true, 
+      method: 'pairing', 
+      message: 'Processus pairing démarré',
+      phoneNumber: phoneNumber,
+      retryCount: currentRetryCount
+    };
+
+  } catch (error) {
+    log.error('❌ Erreur critique processus pairing:', error);
+    
+    await this.cleanupPairing(userId);
+    
+    await this.sendMessageViaHTTP(userId,
+      "❌ *Erreur critique de connexion*\n\n" +
+      "Impossible d'établir la connexion avec WhatsApp.\n\n" +
+      "Veuillez:\n" +
+      "• Utiliser la méthode QR Code\n" +
+      "• Réessayer plus tard\n" +
+      "• Contacter le support si le problème persiste"
+    );
+    
+    throw error;
   }
+        }         
+                          
 
   async handleSuccessfulPairing(socket, userId, userData, saveCreds, rl) {
     try {
@@ -774,22 +795,44 @@ setupCompleteSocketEvents(socket, sessionId, userId) {
   }
 
   async cleanupPairing(userId) {
-    try {
-      this.cleanupUserTimeouts(userId);
-      
-      const pairing = this.activePairings.get(userId);
-      if (pairing && pairing.socket) {
-        await pairing.socket.end();
+  try {
+    log.info(`🧹 Nettoyage complet du pairing pour ${userId}`);
+    
+    // Nettoyer tous les timeouts
+    this.cleanupUserTimeouts(userId);
+    
+    // Nettoyer les compteurs de tentative
+    this.retryCounts.delete(userId);
+    
+    // Fermer le socket s'il existe
+    const pairing = this.activePairings.get(userId);
+    if (pairing) {
+      if (pairing.socket) {
+        try {
+          await pairing.socket.end();
+          log.info(`🔌 Socket fermé pour ${userId}`);
+        } catch (socketError) {
+          log.warn(`⚠️ Erreur fermeture socket: ${socketError.message}`);
+        }
       }
-      this.activePairings.delete(userId);
-      this.retryCounts.delete(userId);
-      await this.cleanup();
-      log.info(`🧹 Pairing nettoyé pour ${userId}`);
-    } catch (error) {
-      log.error(`❌ Erreur nettoyage pairing ${userId}:`, error);
+      
+      if (pairing.rl) {
+        pairing.rl.close();
+      }
     }
+    
+    // Supprimer de la map active
+    this.activePairings.delete(userId);
+    
+    // Nettoyer les fichiers temporaires
+    await this.cleanup();
+    
+    log.success(`✅ Pairing complètement nettoyé pour ${userId}`);
+  } catch (error) {
+    log.error(`❌ Erreur nettoyage pairing ${userId}:`, error);
   }
-
+    }
+  
   async standalonePairing() {
     if (!this.isPairingMode) {
       console.log(chalk.red("❌ Utilisez --use-pairing-code pour le mode pairing"));

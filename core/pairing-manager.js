@@ -166,11 +166,11 @@ class PairingManager {
         syncFullHistory: false,
         markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 300000,
-        defaultQueryTimeoutMs: 120000,
+        connectTimeoutMs: 480000,
+        defaultQueryTimeoutMs: 180000,
         keepAliveIntervalMs: 30000,
         retryRequestDelayMs: 5000,
-        maxRetries: 5,
+        maxRetries: 3,
         emitOwnEvents: false,
         generateHighQualityLinkPreview: false,
         fireInitQueries: true,
@@ -227,7 +227,7 @@ class PairingManager {
                   );
                   await this.cleanupPairing(userId);
                 }
-              }, 600000);
+              }, 490000);
 
               this.connectionTimeouts.set(userId, connectionTimeout);
 

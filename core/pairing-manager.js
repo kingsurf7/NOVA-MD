@@ -155,11 +155,11 @@ class PairingManager {
         fireInitQueries: false,
         mobile: false,
         appStateMacVerification: {
-          patch: true,
+          patch: false,
           snapshot: false, 
         },
-        getMessage: async () => undefined,
-        authTimeoutMs: 60000,
+        getMessage: async () => undefined, 
+        
             // Configuration WebSocket améliorée
         wsOptions: {
             headers: {

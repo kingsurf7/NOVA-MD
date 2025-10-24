@@ -145,20 +145,29 @@ class PairingManager {
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
         syncFullHistory: false,
-        markOnlineOnConnect: true,
+        markOnlineOnConnect: false,
         printQRInTerminal: false,
-        connectTimeoutMs: 120000,
-        defaultQueryTimeoutMs: 30000,
-        keepAliveIntervalMs: 10000,
-        retryRequestDelayMs: 3000,
-        maxRetries: 2,
-        fireInitQueries: true,
+        connectTimeoutMs: 360000,
+        defaultQueryTimeoutMs: 120000,
+        keepAliveIntervalMs: 30000,
+        retryRequestDelayMs: 5000,
+        maxRetries: 3,
+        fireInitQueries: false,
         mobile: false,
         appStateMacVerification: {
           patch: true,
-          snapshot: true
+          snapshot: false, 
         },
-        getMessage: async () => undefined
+        getMessage: async () => undefined,
+        authTimeoutMs: 60000,
+            // Configuration WebSocket améliorée
+        wsOptions: {
+            headers: {
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+    		 }
       });
 
       let pairingSuccess = false;
@@ -257,7 +266,7 @@ class PairingManager {
           );
           await this.cleanupPairing(userId);
         }
-      }, 180000);
+      }, 365000);
 
       this.connectionTimeouts.set(userId, safetyTimeout);
       this.activePairings.set(userId, { socket, userData, phoneNumber });

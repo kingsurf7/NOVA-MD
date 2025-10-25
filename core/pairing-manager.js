@@ -79,16 +79,24 @@ class PairingManager {
   async startPairingProcess(userId, userData) {
     // UTILISER le chemin absolu
     const pairingAuthPath = path.join(process.cwd(), this.sessionName);
-    const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
     
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    
-    const question = (text) => new Promise((resolve) => rl.question(text, resolve));
-
     try {
+      // CORRECTION : Vérifier que useMultiFileAuthState retourne bien un objet
+      const authState = await useMultiFileAuthState(pairingAuthPath);
+      
+      if (!authState || !authState.state || !authState.saveCreds) {
+        throw new Error('Échec de l\'initialisation de l\'état d\'authentification');
+      }
+      
+      const { state, saveCreds } = authState;
+      
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      
+      const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+
       const socket = makeWASocket({
         logger: pino({ level: "silent" }),
         browser: Browsers.ubuntu('Chrome'),
@@ -124,14 +132,11 @@ class PairingManager {
       return { success: true, method: 'pairing' };
 
     } catch (error) {
-      rl.close();
       log.error('❌ Erreur processus pairing:', error);
       throw error;
     }
   }
 
-
-                                  
   async startPairingWithPhone(userId, userData, phoneNumber) {
     try {
         log.info(`🔐 [PAIRING] Initialisation pour ${userId} (${phoneNumber})`);
@@ -146,18 +151,40 @@ class PairingManager {
         let state, saveCreds;
 
         try {
-            ({ state, saveCreds } = await useMultiFileAuthState(pairingAuthPath));
+            // CORRECTION : Récupérer correctement l'état d'authentification
+            const authState = await useMultiFileAuthState(pairingAuthPath);
+            
+            if (!authState || !authState.state || !authState.saveCreds) {
+                throw new Error('Échec de l\'initialisation de l\'état d\'authentification');
+            }
+            
+            state = authState.state;
+            saveCreds = authState.saveCreds;
 
             // Vérifie que l'état contient bien les credentials
             if (!state?.creds) {
                 log.warn(`⚠️ Aucun creds détecté, réinitialisation du dossier de session.`);
                 await fs.emptyDir(pairingAuthPath);
-                ({ state, saveCreds } = await useMultiFileAuthState(pairingAuthPath));
+                
+                const newAuthState = await useMultiFileAuthState(pairingAuthPath);
+                if (!newAuthState || !newAuthState.state || !newAuthState.saveCreds) {
+                    throw new Error('Impossible d\'initialiser l\'état d\'authentification après nettoyage');
+                }
+                
+                state = newAuthState.state;
+                saveCreds = newAuthState.saveCreds;
             }
         } catch (initErr) {
             log.error(`💣 Erreur initialisation auth state: ${initErr.message}`);
             await fs.emptyDir(pairingAuthPath);
-            ({ state, saveCreds } = await useMultiFileAuthState(pairingAuthPath));
+            
+            const newAuthState = await useMultiFileAuthState(pairingAuthPath);
+            if (!newAuthState || !newAuthState.state || !newAuthState.saveCreds) {
+                throw new Error('Impossible d\'initialiser l\'état d\'authentification');
+            }
+            
+            state = newAuthState.state;
+            saveCreds = newAuthState.saveCreds;
         }
 
         // 3️⃣ Création du socket Baileys
@@ -180,7 +207,8 @@ class PairingManager {
             linkPreviewImageThumbnailWidth: 0,
             msgRetryCounterCache: new Map(),
             transactionOpts: { maxCommitRetries: 2, delayBeforeRetry: 1500 },
-            getMessage: async () => undefined, 
+            getMessage: async () => undefined,
+            auth: state // CORRECTION : Ajouter l'état d'authentification
         });
 
         let pairingCode = null;
@@ -189,26 +217,32 @@ class PairingManager {
         // 4️⃣ Génération du code pairing
         try {
             log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
-            await delay(2000); // Laisser le socket s’initialiser
-            pairingCode = await socket.requestPairingCode(phoneNumber);
+            await delay(2000); // Laisser le socket s'initialiser
+            
+            // CORRECTION : Vérifier que le socket est prêt
+            if (!socket.authState.creds.registered) {
+                pairingCode = await socket.requestPairingCode(phoneNumber);
 
-            if (!pairingCode) throw new Error("Aucun code retourné par WhatsApp");
+                if (!pairingCode) throw new Error("Aucun code retourné par WhatsApp");
 
-            // Format esthétique du code
-            pairingCode = pairingCode.replace(/(.{4})/g, '$1-').replace(/-$/, '');
-            log.success(`✅ Code généré: ${pairingCode}`);
+                // Format esthétique du code
+                pairingCode = pairingCode.replace(/(.{4})/g, '$1-').replace(/-$/, '');
+                log.success(`✅ Code généré: ${pairingCode}`);
 
-            // Envoi du code à l'utilisateur
-            await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
-            await this.sendMessageViaHTTP(
-                userId,
-                `🔑 *Code de Pairing généré !*\n\n` +
-                `📱 Pour: ${phoneNumber}\n` +
-                `🧩 Code: *${pairingCode}*\n\n` +
-                `👉 Ouvrez WhatsApp > Paramètres > Appareils liés > Lier un appareil.\n` +
-                `Entrez le code immédiatement.\n\n` +
-                `⏱️ Valide 3 minutes.`
-            );
+                // Envoi du code à l'utilisateur
+                await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
+                await this.sendMessageViaHTTP(
+                    userId,
+                    `🔑 *Code de Pairing généré !*\n\n` +
+                    `📱 Pour: ${phoneNumber}\n` +
+                    `🧩 Code: *${pairingCode}*\n\n` +
+                    `👉 Ouvrez WhatsApp > Paramètres > Appareils liés > Lier un appareil.\n` +
+                    `Entrez le code immédiatement.\n\n` +
+                    `⏱️ Valide 3 minutes.`
+                );
+            } else {
+                throw new Error('Déjà enregistré, pas besoin de pairing');
+            }
 
         } catch (err) {
             log.error(`❌ Erreur génération code: ${err.message}`);
@@ -216,6 +250,10 @@ class PairingManager {
                 throw new Error('Trop de tentatives. Attendez 10 min avant de réessayer.');
             } else if (err.message.includes('invalid')) {
                 throw new Error('Numéro de téléphone invalide.');
+            } else if (err.message.includes('Déjà enregistré')) {
+                // Si déjà enregistré, continuer avec la connexion normale
+                log.info('✅ Déjà enregistré, connexion directe');
+                pairingSuccess = true;
             } else {
                 throw new Error('Service WhatsApp temporairement indisponible.');
             }
@@ -296,8 +334,7 @@ class PairingManager {
         );
         throw error;
     }
-	}
-										   
+  }
 
   async handleSuccessfulPairing(socket, userId, userData, saveCreds, rl) {
     try {

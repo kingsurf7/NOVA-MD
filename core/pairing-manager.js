@@ -133,17 +133,18 @@ class PairingManager {
 
   async startPairingWithPhone(userId, userData, phoneNumber) {
     try {
-        log.info(`🔐 DÉBUT pairing pour ${userId} avec ${phoneNumber}`);
+        log.info(`🔐 [PAIRING] Initialisation pour ${userId} (${phoneNumber})`);
 
-        // 🧹 Nettoyage complet avant de démarrer
+        // 1️⃣ Nettoyage avant toute tentative
         await this.forceCleanupSessions(userId);
 
+        // 2️⃣ Préparation du dossier de session
         const pairingAuthPath = path.join(process.cwd(), this.sessionName);
         await fs.ensureDir(pairingAuthPath);
-
         const { state, saveCreds } = await useMultiFileAuthState(pairingAuthPath);
-        const { version } = await fetchLatestBaileysVersion();
 
+        // 3️⃣ Création du socket Baileys
+        const { version } = await fetchLatestBaileysVersion(); 
         // ⚙️ Configuration socket stabilisée
         const socket = makeWASocket({
             version,

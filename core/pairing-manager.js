@@ -297,8 +297,8 @@ class PairingManager {
         throw error;
     }
 	}
-										   }
-	
+										   
+
   async handleSuccessfulPairing(socket, userId, userData, saveCreds, rl) {
     try {
         const sessionId = `pairing_${userId}_${Date.now()}`;

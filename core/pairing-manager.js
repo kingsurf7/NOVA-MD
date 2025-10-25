@@ -11,7 +11,8 @@ const {
   delay,
   DisconnectReason, 
   PHONENUMBER_MCC,
-  Browsers
+  Browsers,
+  fetchLatestBaileysVersion 
 } = require("@whiskeysockets/baileys");
 const { createClient } = require('@supabase/supabase-js');
 const config = require('../config');

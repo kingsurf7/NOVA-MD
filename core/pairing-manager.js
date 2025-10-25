@@ -152,7 +152,7 @@ class PairingManager {
             printQRInTerminal: false,
             auth: state,
             browser: Browsers.ubuntu('Chrome'),
-            mobile: true, // crucial pour pairing code
+            mobile: false, // crucial pour pairing code
             markOnlineOnConnect: false,
             syncFullHistory: false,
             generateHighQualityLinkPreview: false,

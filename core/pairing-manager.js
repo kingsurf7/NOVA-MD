@@ -12,7 +12,19 @@ const {
   DisconnectReason, 
   PHONENUMBER_MCC,
   Browsers,
-  fetchLatestBaileysVersion 
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  getAggregateVotesInPollMessage,
+  WA_DEFAULT_EPHEMERAL,
+  jidNormalizedUser,
+  proto,
+  getDevice,
+  generateWAMessageFromContent,
+  makeInMemoryStore,
+  getContentType,
+  generateForwardMessageContent,
+  downloadContentFromMessage,
+  jidDecode
 } = require("@whiskeysockets/baileys");
 const { createClient } = require('@supabase/supabase-js');
 const config = require('../config');
@@ -29,6 +41,7 @@ class PairingManager {
     this.retryCounts = new Map();
     this.pairingTimeouts = new Map();
     this.connectionTimeouts = new Map();
+    this.store = makeInMemoryStore({ logger: pino().child({ level: 'silent' }) });
   }
 
   async initializePairing(userId, userData, phoneNumber = null) {
@@ -77,11 +90,9 @@ class PairingManager {
   }
 
   async startPairingProcess(userId, userData) {
-    // UTILISER le chemin absolu
     const pairingAuthPath = path.join(process.cwd(), this.sessionName);
     
     try {
-      // CORRECTION : Vérifier que useMultiFileAuthState retourne bien un objet
       const authState = await useMultiFileAuthState(pairingAuthPath);
       
       if (!authState || !authState.state || !authState.saveCreds) {
@@ -97,17 +108,35 @@ class PairingManager {
       
       const question = (text) => new Promise((resolve) => rl.question(text, resolve));
 
+      // OPTIMISATION : Utilisation de makeCacheableSignalKeyStore et configuration améliorée
+      const { version } = await fetchLatestBaileysVersion();
       const socket = makeWASocket({
+        version,
         logger: pino({ level: "silent" }),
-        browser: Browsers.ubuntu('Chrome'),
-        auth: state,
-        syncFullHistory: false,
+        printQRInTerminal: false,
+        browser: Browsers.ubuntu("Chrome"),
+        mobile: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 300000,
+        syncFullHistory: false,
+        generateHighQualityLinkPreview: true,
+        connectTimeoutMs: 120000,
         defaultQueryTimeoutMs: 120000,
-        keepAliveIntervalMs: 30000,
-        mobile: false
+        emitOwnEvents: true,
+        retryRequestDelayMs: 3000,
+        maxRetries: 3,
+        fireInitQueries: false,
+        linkPreviewImageThumbnailWidth: 0,
+        msgRetryCounterCache: new Map(),
+        transactionOpts: { maxCommitRetries: 2, delayBeforeRetry: 1500 },
+        getMessage: async () => undefined,
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+        }
       });
+
+      // Bind store to socket
+      this.store.bind(socket.ev);
 
       if (this.isPairingMode && !socket.authState.creds.registered) {
         await this.handlePairingCode(socket, userId, userData, question, rl);
@@ -151,7 +180,6 @@ class PairingManager {
         let state, saveCreds;
 
         try {
-            // CORRECTION : Récupérer correctement l'état d'authentification
             const authState = await useMultiFileAuthState(pairingAuthPath);
             
             if (!authState || !authState.state || !authState.saveCreds) {
@@ -161,7 +189,6 @@ class PairingManager {
             state = authState.state;
             saveCreds = authState.saveCreds;
 
-            // Vérifie que l'état contient bien les credentials
             if (!state?.creds) {
                 log.warn(`⚠️ Aucun creds détecté, réinitialisation du dossier de session.`);
                 await fs.emptyDir(pairingAuthPath);
@@ -187,17 +214,21 @@ class PairingManager {
             saveCreds = newAuthState.saveCreds;
         }
 
-        // 3️⃣ Création du socket Baileys
+        // 3️⃣ Création du socket Baileys optimisé
         const { version } = await fetchLatestBaileysVersion();
-        const socket = makeWASocket({
+        const sock = makeWASocket({
             version,
-            logger: pino({ level: "silent" }),
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
+            },
             printQRInTerminal: false,
+            generateHighQualityLinkPreview: true,
+            logger: pino({ level: "fatal" }).child({ level: "fatal" }),
+            syncFullHistory: false,
             browser: Browsers.ubuntu("Chrome"),
             mobile: false,
             markOnlineOnConnect: false,
-            syncFullHistory: false,
-            generateHighQualityLinkPreview: false,
             connectTimeoutMs: 120000,
             defaultQueryTimeoutMs: 120000,
             emitOwnEvents: true,
@@ -207,9 +238,11 @@ class PairingManager {
             linkPreviewImageThumbnailWidth: 0,
             msgRetryCounterCache: new Map(),
             transactionOpts: { maxCommitRetries: 2, delayBeforeRetry: 1500 },
-            getMessage: async () => undefined,
-            auth: state // CORRECTION : Ajouter l'état d'authentification
+            getMessage: async () => undefined
         });
+
+        // Bind store to socket
+        this.store.bind(sock.ev);
 
         let pairingCode = null;
         let pairingSuccess = false;
@@ -217,11 +250,15 @@ class PairingManager {
         // 4️⃣ Génération du code pairing
         try {
             log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
-            await delay(2000); // Laisser le socket s'initialiser
             
-            // CORRECTION : Vérifier que le socket est prêt
-            if (!socket.authState.creds.registered) {
-                pairingCode = await socket.requestPairingCode(phoneNumber);
+            // CORRECTION : Attendre que le socket soit prêt
+            await delay(1500);
+            
+            // Nettoyer le numéro de téléphone
+            const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+            
+            if (!sock.authState.creds.registered) {
+                pairingCode = await sock.requestPairingCode(cleanNumber);
 
                 if (!pairingCode) throw new Error("Aucun code retourné par WhatsApp");
 
@@ -230,11 +267,11 @@ class PairingManager {
                 log.success(`✅ Code généré: ${pairingCode}`);
 
                 // Envoi du code à l'utilisateur
-                await this.sendPairingCodeViaHTTP(userId, pairingCode, phoneNumber);
+                await this.sendPairingCodeViaHTTP(userId, pairingCode, cleanNumber);
                 await this.sendMessageViaHTTP(
                     userId,
                     `🔑 *Code de Pairing généré !*\n\n` +
-                    `📱 Pour: ${phoneNumber}\n` +
+                    `📱 Pour: ${cleanNumber}\n` +
                     `🧩 Code: *${pairingCode}*\n\n` +
                     `👉 Ouvrez WhatsApp > Paramètres > Appareils liés > Lier un appareil.\n` +
                     `Entrez le code immédiatement.\n\n` +
@@ -251,7 +288,6 @@ class PairingManager {
             } else if (err.message.includes('invalid')) {
                 throw new Error('Numéro de téléphone invalide.');
             } else if (err.message.includes('Déjà enregistré')) {
-                // Si déjà enregistré, continuer avec la connexion normale
                 log.info('✅ Déjà enregistré, connexion directe');
                 pairingSuccess = true;
             } else {
@@ -260,7 +296,7 @@ class PairingManager {
         }
 
         // 5️⃣ Gestion des événements de connexion
-        socket.ev.on("connection.update", async (update) => {
+        sock.ev.on("connection.update", async (update) => {
             const { connection, lastDisconnect } = update;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
 
@@ -269,7 +305,7 @@ class PairingManager {
                     log.success(`🎉 Pairing réussi pour ${userId}`);
                     pairingSuccess = true;
                     clearTimeout(this.connectionTimeouts.get(userId));
-                    await this.handleSuccessfulPairing(socket, userId, userData, saveCreds, null);
+                    await this.handleSuccessfulPairing(sock, userId, userData, saveCreds, null);
                     break;
 
                 case "close":
@@ -293,7 +329,7 @@ class PairingManager {
         });
 
         // 6️⃣ Sauvegarde automatique des credentials
-        socket.ev.on("creds.update", saveCreds);
+        sock.ev.on("creds.update", saveCreds);
 
         // 7️⃣ Timeout de sécurité global
         const safetyTimeout = setTimeout(async () => {
@@ -310,7 +346,7 @@ class PairingManager {
 
         this.connectionTimeouts.set(userId, safetyTimeout);
         this.activePairings.set(userId, {
-            socket,
+            socket: sock,
             userData,
             phoneNumber,
             pairingCode,
@@ -369,7 +405,8 @@ class PairingManager {
             subscriptionActive: isPayedUser,
             connectionMethod: 'pairing',
             createdAt: new Date(),
-            lastActivity: new Date()
+            lastActivity: new Date(),
+            store: this.store
         };
 
         // AJOUTER LA SESSION AU SESSION MANAGER
@@ -512,6 +549,7 @@ class PairingManager {
         chalk.bgBlack(chalk.greenBright(`📱 Entrez votre numéro WhatsApp (ex: 237612345678) : `))
       );
       
+      // Nettoyer le numéro comme dans la version optimisée
       phoneNumber = phoneNumber.replace(/[^0-9]/g, "");
 
       if (!Object.keys(PHONENUMBER_MCC).some((v) => phoneNumber.startsWith(v))) {
@@ -524,6 +562,9 @@ class PairingManager {
 
       setTimeout(async () => {
         try {
+          // Attendre que le socket soit prêt
+          await delay(1500);
+          
           let code = await socket.requestPairingCode(phoneNumber);
           code = code?.match(/.{1,4}/g)?.join("-") || code;
           

@@ -41,7 +41,23 @@ class PairingManager {
     this.retryCounts = new Map();
     this.pairingTimeouts = new Map();
     this.connectionTimeouts = new Map();
-    this.store = makeInMemoryStore({ logger: pino().child({ level: 'silent' }) });
+    this.store = {
+      chats: new Map(),
+      contacts: new Map(),
+      messages: new Map(),
+      bind: function(ev) {
+        // Simulation basique du binding
+        ev.on('chats.set', ({ chats }) => {
+          chats.forEach(chat => this.chats.set(chat.id, chat));
+        });
+        ev.on('contacts.set', ({ contacts }) => {
+          contacts.forEach(contact => this.contacts.set(contact.id, contact));
+        });
+        ev.on('messages.upsert', ({ messages }) => {
+          messages.forEach(message => this.messages.set(message.key.id, message));
+        });
+      }
+    };
   }
 
   async initializePairing(userId, userData, phoneNumber = null) {

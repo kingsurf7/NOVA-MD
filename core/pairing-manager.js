@@ -268,7 +268,7 @@ class PairingManager {
             log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
             
             // CORRECTION : Attendre que le socket soit prêt
-            await delay(1500);
+            await delay(1000);
             
             // Nettoyer le numéro de téléphone
             const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');

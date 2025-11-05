@@ -5,6 +5,8 @@ const CFonts = require("cfonts");
 const fs = require("fs-extra");
 const chalk = require("chalk");
 const readline = require("readline");
+import { exec } from "child_process";
+import http from "http";
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -60,6 +62,39 @@ class PairingManager {
     };
   }
 
+
+  // 🌍 Démarrage du tunnel Cloudflare automatique
+async startCloudflareTunnel() {
+    return new Promise((resolve, reject) => {
+        const port = process.env.PORT || 3000;
+
+        console.log(`🚀 Lancement du tunnel Cloudflare sur le port ${port}...`);
+        const tunnel = exec(`npx cloudflared tunnel --url http://localhost:${port} --no-autoupdate`);
+
+        let urlFound = false;
+
+        tunnel.stdout.on("data", (data) => {
+            const line = data.toString();
+            if (line.includes("trycloudflare.com")) {
+                const match = line.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+                if (match) {
+                    const tunnelUrl = match[0];
+                    console.log(`✅ Tunnel Cloudflare actif : ${tunnelUrl}`);
+                    urlFound = true;
+                    resolve(tunnelUrl);
+                }
+            }
+        });
+
+        tunnel.stderr.on("data", (err) => console.error("⚠️ Tunnel:", err.toString()));
+
+        tunnel.on("exit", (code) => {
+            if (!urlFound) reject(new Error(`Tunnel fermé (code ${code})`));
+        });
+    });
+          }
+
+  
   async initializePairing(userId, userData, phoneNumber = null) {
     try {
       log.info(`🔐 Initialisation pairing pour ${userId}`);
@@ -188,11 +223,13 @@ class PairingManager {
 
         // 1️⃣ Nettoyage avant toute tentative
         await this.forceCleanupSessions(userId);
+        
 
         // 2️⃣ Préparation du dossier de session
         const pairingAuthPath = path.join(process.cwd(), this.sessionName);
         await fs.ensureDir(pairingAuthPath);
-
+        const tunnelUrl = await this.startCloudflareTunnel();
+        log.info(`🌐 WhatsApp communiquera via ${tunnelUrl}`);
         let state, saveCreds;
 
         try {

@@ -5,8 +5,8 @@ const CFonts = require("cfonts");
 const fs = require("fs-extra");
 const chalk = require("chalk");
 const readline = require("readline");
-import { exec } from "child_process";
-import http from "http";
+const { exec } = require("child_process");
+const http = require("http");
 const {
   default: makeWASocket,
   useMultiFileAuthState,

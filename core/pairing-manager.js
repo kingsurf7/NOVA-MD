@@ -43,6 +43,7 @@ class PairingManager {
     this.retryCounts = new Map();
     this.pairingTimeouts = new Map();
     this.connectionTimeouts = new Map();
+    this.tunnelUrl= null;
     this.store = {
       chats: new Map(),
       contacts: new Map(),

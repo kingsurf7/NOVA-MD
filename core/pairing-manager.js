@@ -234,13 +234,14 @@ async startCloudflareTunnel() {
 
         try {
             const authState = await useMultiFileAuthState(pairingAuthPath);
-            
-            if (!authState || !authState.state || !authState.saveCreds) {
-                throw new Error('Échec de l\'initialisation de l\'état d\'authentification');
-            }
-            
-            state = authState.state;
-            saveCreds = authState.saveCreds;
+if (!authState || typeof authState !== 'object') {
+  throw new Error('useMultiFileAuthState returned invalid value');
+}
+const state = authState.state ?? authState[0] ?? null;
+const saveCreds = authState.saveCreds ?? authState[1] ?? null;
+if (!state || !saveCreds) {
+  throw new Error('Impossible d\'initialiser l\'état d\'authentification');
+} 
 
             if (!state?.creds) {
                 log.warn(`⚠️ Aucun creds détecté, réinitialisation du dossier de session.`);
@@ -279,7 +280,7 @@ async startCloudflareTunnel() {
             generateHighQualityLinkPreview: true,
             logger: pino({ level: "fatal" }).child({ level: "fatal" }),
             syncFullHistory: false,
-            browser: Browsers.ubuntu("Chrome"),
+            browser: Browsers.Linux("Chrome"),
             mobile: false,
             markOnlineOnConnect: false,
             connectTimeoutMs: 120000,

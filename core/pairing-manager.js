@@ -232,40 +232,43 @@ async startCloudflareTunnel() {
       
         let state, saveCreds;
 
-        try {
-            const authState = await useMultiFileAuthState(pairingAuthPath);
-if (!authState || typeof authState !== 'object') {
-  throw new Error('useMultiFileAuthState returned invalid value');
-}
-const state = authState.state ?? authState[0] ?? null;
-const saveCreds = authState.saveCreds ?? authState[1] ?? null;
-if (!state || !saveCreds) {
-  throw new Error('Impossible d\'initialiser l\'état d\'authentification');
-} 
+				try {
+  				 // 1️⃣ Initialisation du state
+  				const authState = await useMultiFileAuthState(pairingAuthPath);
 
-            if (!state?.creds) {
-                log.warn(`⚠️ Aucun creds détecté, réinitialisation du dossier de session.`);
-                await fs.emptyDir(pairingAuthPath);
-                
-                const newAuthState = await useMultiFileAuthState(pairingAuthPath);
-                if (!newAuthState || !newAuthState.state || !newAuthState.saveCreds) {
-                    throw new Error('Impossible d\'initialiser l\'état d\'authentification après nettoyage');
-                }
-                
-                state = newAuthState.state;
-                saveCreds = newAuthState.saveCreds;
-            }
-        } catch (initErr) {
-            log.error(`💣 Erreur initialisation auth state: ${initErr.message}`);
-            await fs.emptyDir(pairingAuthPath);
-            
-            const newAuthState = await useMultiFileAuthState(pairingAuthPath);
-            if (!newAuthState || !newAuthState.state || !newAuthState.saveCreds) {
-                throw new Error('Impossible d\'initialiser l\'état d\'authentification');
-            }
-            
-            state = newAuthState.state;
-            saveCreds = newAuthState.saveCreds;
+  				if (!authState?.state || !authState?.saveCreds) {
+      			 throw new Error('État d’authentification invalide ou incomplet');
+				  }
+
+  				state = authState.state;
+  				saveCreds = authState.saveCreds;
+
+  				// 2️⃣ Vérifie que creds existent bien
+			   if (!state.creds) {
+      		 log.warn(`⚠️ Aucun creds détecté, réinitialisation du dossier de session...`);
+      		 await fs.emptyDir(pairingAuthPath);
+
+      		  const newAuth = await useMultiFileAuthState(pairingAuthPath);
+      			if (!newAuth?.state || !newAuth?.saveCreds) {
+            throw new Error('Impossible d’initialiser un nouvel état après nettoyage');
+          }
+
+          state = newAuth.state;
+          saveCreds = newAuth.saveCreds;
+        }
+
+      } catch (initErr) {
+        // 3️⃣ Gestion d’erreur globale (ex: FS corrompu)
+        log.error(`💣 Erreur initialisation auth state: ${initErr.message}`);
+        await fs.emptyDir(pairingAuthPath);
+
+         const retryAuth = await useMultiFileAuthState(pairingAuthPath);
+         if (!retryAuth?.state || !retryAuth?.saveCreds) {
+            throw new Error('Impossible d’initialiser l’état d’authentification après erreur critique');
+         }
+
+           state = retryAuth.state;
+          saveCreds = retryAuth.saveCreds;
         }
 
         // 3️⃣ Création du socket Baileys optimisé

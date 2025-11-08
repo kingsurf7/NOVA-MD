@@ -67,7 +67,7 @@ class PairingManager {
   // 🌍 Démarrage du tunnel Cloudflare automatique
 async startCloudflareTunnel() {
     return new Promise((resolve, reject) => {
-        const port = process.env.PORT || 3000;
+        const port = process.env.PORTE || 3002;
 
         console.log(`🚀 Lancement du tunnel Cloudflare sur le port ${port}...`);
         const tunnel = exec(`npx cloudflared tunnel --url http://localhost:${port} --no-autoupdate`);

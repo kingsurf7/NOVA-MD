@@ -10,6 +10,8 @@ const CommandHandler = require('./core/command-handler');
 const log = require('./utils/logger')(module);
 const path = require('path');
 const fs = require('fs');
+const WebSocket = require("ws");
+global.WebSocket = WebSocket;
 
 class NovaMDApp {
     constructor() {

@@ -24,7 +24,7 @@
   "author": "NOSTRA",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.8",
+    "@whiskeysockets/baileys": "^6.7.8",
     "@supabase/supabase-js": "latest",
     "@colors/colors": "^1.5.0",
     "axios": "^1.5.0",
@@ -33,7 +33,9 @@
     "express": "^4.8.2",
     "fs-extra": "^11.2.0",
     "pino": "^8.15.0",
-    "qrcode": "^1.5.3"
+    "qrcode": "^1.5.3", 
+    "node-fetch": "^2.6.7", 
+    "ws": "^8.18.0" 
   },
   "devDependencies": {
     "nodemon": "latest"

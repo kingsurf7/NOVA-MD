@@ -283,7 +283,7 @@ async startCloudflareTunnel() {
             generateHighQualityLinkPreview: true,
             logger: pino({ level: "fatal" }).child({ level: "fatal" }),
             syncFullHistory: false,
-            browser: Browsers.Linux("Chrome"),
+            browser: Browsers.macOs("Safari"),
             mobile: false,
             markOnlineOnConnect: false,
             connectTimeoutMs: 120000,

@@ -281,9 +281,17 @@ async startCloudflareTunnel() {
             },
             printQRInTerminal: false,
             generateHighQualityLinkPreview: false,
-            logger: pino({ level: "fatal" }).child({ level: "fatal" }),
+            logger: pino({ level: "silent" }),
             syncFullHistory: false,
             browser: Browsers.macOS("Safari"),
+			ws: {
+    		  version, 
+        	 origin: 'https://web.whatsapp.com'
+    		},
+		   appStateMacVerification: {
+        	 patch: false,
+        	 snapshot: false
+    		 },	
             mobile: false,
             markOnlineOnConnect: false,
             connectTimeoutMs: 120000,
@@ -291,11 +299,12 @@ async startCloudflareTunnel() {
             emitOwnEvents: true,
             retryRequestDelayMs: 3000,
             maxRetries: 3,
-            fireInitQueries: true,
-            linkPreviewImageThumbnailWidth: 0,
+            fireInitQueries: false,
             msgRetryCounterCache: new Map(),
             transactionOpts: { maxCommitRetries: 2, delayBeforeRetry: 1500 },
-            getMessage: async () => undefined
+            getMessage: async () => undefined, 
+			shouldSyncHistoryMessage: () => false,
+    shouldIgnoreJid: (jid) => jid?.endsWith('@g.us') || jid?.endsWith('@broadcast')
         });
 
         // Bind store to socket

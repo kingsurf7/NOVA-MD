@@ -38,11 +38,11 @@
     "ws": "^8.18.0" 
   },
   "devDependencies": {
-    "nodemon": "latest"
+    "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": "latest", 
-    "npm": "latest"
+    "node": ">=20.0.0", 
+    "npm": ">=10.0.0"
   }
 }
  

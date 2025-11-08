@@ -229,8 +229,7 @@ async startCloudflareTunnel() {
         // 2️⃣ Préparation du dossier de session
         const pairingAuthPath = path.join(process.cwd(), this.sessionName);
         await fs.ensureDir(pairingAuthPath);
-        const tunnelUrl = await this.startCloudflareTunnel();
-        log.info(`🌐 WhatsApp communiquera via ${tunnelUrl}`);
+      
         let state, saveCreds;
 
         try {

@@ -1,4 +1,4 @@
-CONNECT, 1xac a const pino = require("pino");
+const pino = require("pino");
 const path = require("path");
 const colors = require("@colors/colors/safe");
 const CFonts = require("cfonts");
@@ -7,7 +7,6 @@ const chalk = require("chalk");
 const readline = require("readline");
 const { exec } = require("child_process");
 const http = require("http");
-const fetch = require("node-fetch"); // <-- ajouté
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -237,7 +236,7 @@ class PairingManager {
         version,
         logger: pino({ level: "silent" }),
         printQRInTerminal: false, // we'll send QR via HTTP bridge
-        browser: Browsers.macOS("Safari"),
+        browser: Browsers.ubuntu("Chrome"),
         mobile: false,
         markOnlineOnConnect: false,
         syncFullHistory: false,
@@ -355,7 +354,7 @@ class PairingManager {
         generateHighQualityLinkPreview: false,
         logger: pino({ level: "silent" }),
         syncFullHistory: false,
-        browser: Browsers.macOS("Safari"),
+        browser: Browsers.ubuntu("Chrome"),
         mobile: false,
         markOnlineOnConnect: false,
         connectTimeoutMs: 120000,
@@ -471,7 +470,7 @@ class PairingManager {
             `Veuillez relancer /connect et choisir *QR Code* (plus rapide).`).catch(() => {});
           await this.cleanupPairing(userId);
         }
-      }, 3 * 100 * 1000);
+      }, 3 * 80 * 1000);
 
       this.pairingTimeouts.set(userId, safetyTimeout);
 

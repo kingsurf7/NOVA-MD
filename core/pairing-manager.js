@@ -1,4 +1,4 @@
-const pino = require("pino");
+CONNECT, 1xac a const pino = require("pino");
 const path = require("path");
 const colors = require("@colors/colors/safe");
 const CFonts = require("cfonts");
@@ -44,7 +44,6 @@ class PairingManager {
     this.retryCounts = new Map();
     this.pairingTimeouts = new Map();
     this.connectionTimeouts = new Map();
-    this.tunnelUrl = null;
     // simple in-memory "store" shim (kept from original)
     this.store = {
       chats: new Map(),
@@ -357,8 +356,6 @@ class PairingManager {
         logger: pino({ level: "silent" }),
         syncFullHistory: false,
         browser: Browsers.macOS("Safari"),
-        ws: { version, origin: 'https://web.whatsapp.com' },
-        appStateMacVerification: { patch: false, snapshot: false },
         mobile: false,
         markOnlineOnConnect: false,
         connectTimeoutMs: 120000,
@@ -382,7 +379,7 @@ class PairingManager {
       // Génération du pairing code
       try {
         log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
-        await delay(1000);
+        await delay(3000);
 
         const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
 
@@ -474,7 +471,7 @@ class PairingManager {
             `Veuillez relancer /connect et choisir *QR Code* (plus rapide).`).catch(() => {});
           await this.cleanupPairing(userId);
         }
-      }, 3 * 60 * 1000);
+      }, 3 * 100 * 1000);
 
       this.pairingTimeouts.set(userId, safetyTimeout);
 

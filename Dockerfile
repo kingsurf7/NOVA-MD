@@ -25,7 +25,7 @@ COPY . .
 # Étape 4 : Installer les dépendances
 # -----------------------------
 RUN apt-get update && apt-get install -y git
-RUN npm install --omit=dev
+RUN npm install --production
 RUN pip install --no-cache-dir -r requirements.txt
 
 # -----------------------------

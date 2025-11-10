@@ -357,8 +357,8 @@ class PairingManager {
         browser: Browsers.ubuntu("Chrome"),
         mobile: false ,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 240000,
-        defaultQueryTimeoutMs: 240000,
+        connectTimeoutMs: 360000,
+        defaultQueryTimeoutMs: 360000,
         emitOwnEvents: true,
         retryRequestDelayMs: 3000,
         maxRetries: 3,
@@ -483,7 +483,7 @@ class PairingManager {
             `Veuillez relancer /connect et choisir *QR Code* (plus rapide).`).catch(() => {});
           await this.cleanupPairing(userId);
         }
-      }, 3 * 100 * 1000);
+      }, 3 * 120 * 1000);
 
       this.pairingTimeouts.set(userId, safetyTimeout);
 

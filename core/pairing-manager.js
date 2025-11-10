@@ -357,8 +357,8 @@ class PairingManager {
         browser: Browsers.ubuntu("Chrome"),
         mobile: false,
         markOnlineOnConnect: false,
-        connectTimeoutMs: 120000,
-        defaultQueryTimeoutMs: 120000,
+        connectTimeoutMs: 240000,
+        defaultQueryTimeoutMs: 240000,
         emitOwnEvents: true,
         retryRequestDelayMs: 3000,
         maxRetries: 3,
@@ -378,7 +378,7 @@ class PairingManager {
       // Génération du pairing code
       try {
         log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
-        await delay(3000);
+        await delay(8000);
 
         const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
 
@@ -401,7 +401,7 @@ class PairingManager {
             `🧩 Code: *${pairingCode}*\n\n` +
             `👉 Ouvrez WhatsApp > Paramètres > Appareils liés > Lier un appareil.\n` +
             `Entrez le code immédiatement.\n\n` +
-            `⏱️ Valide 3 minutes.`).catch(() => {});
+            `⏱️ Valide 5 minutes.`).catch(() => {});
         } else {
           log.info('✅ Déjà enregistré, connexion directe');
           pairingSuccess = true;
@@ -419,6 +419,17 @@ class PairingManager {
 
       // connection.update: gérer open/close/connecting
       sock.ev.on("connection.update", async (update) => {
+        const { connection, lastDisconnect, qr, isNewLogin } = update;
+        
+        const connectionInfo = { 
+          connection, 
+          hasQR: !!qr,
+          isNewLogin,
+          error: lastDisconnect?.error?.message,
+          statusCode: lastDisconnect?.error?.output?.statusCode
+        };
+        
+        log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
         try {
           const { connection, lastDisconnect } = update;
 
@@ -470,7 +481,7 @@ class PairingManager {
             `Veuillez relancer /connect et choisir *QR Code* (plus rapide).`).catch(() => {});
           await this.cleanupPairing(userId);
         }
-      }, 3 * 80 * 1000);
+      }, 3 * 100 * 1000);
 
       this.pairingTimeouts.set(userId, safetyTimeout);
 

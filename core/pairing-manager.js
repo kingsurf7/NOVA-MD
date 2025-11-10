@@ -370,6 +370,8 @@ class PairingManager {
         shouldIgnoreJid: (jid) => jid?.endsWith('@g.us') || jid?.endsWith('@broadcast')
       });
 
+      sock.ev.on("creds.update",saveCreds);
+
       this.store.bind(sock.ev);
 
       let pairingCode = null;
@@ -378,7 +380,7 @@ class PairingManager {
       // Génération du pairing code
       try {
         log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
-        await delay(8000);
+        await delay(7000);
 
         const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
 
@@ -419,11 +421,11 @@ class PairingManager {
 
       // connection.update: gérer open/close/connecting
       sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr, isNewLogin } = update;
+        const { connection, lastDisconnect, isNewLogin } = update;
         
         const connectionInfo = { 
           connection, 
-          hasQR: !!qr,
+          hasQR: false,
           isNewLogin,
           error: lastDisconnect?.error?.message,
           statusCode: lastDisconnect?.error?.output?.statusCode

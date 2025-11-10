@@ -355,7 +355,7 @@ class PairingManager {
         logger: pino({ level: "silent" }),
         syncFullHistory: false,
         browser: Browsers.ubuntu("Chrome"),
-        mobile: { shouldUseMobile:true} ,
+        mobile: false ,
         markOnlineOnConnect: false,
         connectTimeoutMs: 240000,
         defaultQueryTimeoutMs: 240000,

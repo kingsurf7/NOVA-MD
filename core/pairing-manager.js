@@ -300,218 +300,177 @@ class PairingManager {
      Pairing via phone (requestPairingCode)
      --------------------------- */
   async startPairingWithPhone(userId, userData, phoneNumber) {
+  try {
+    log.info(`🔐 [PAIRING] Initialisation pour ${userId} (${phoneNumber})`);
+    await this.forceCleanupSessions(userId).catch(() => {});
+
+    const pairingAuthPath = path.join(process.cwd(), this.sessionName);
+    await fs.ensureDir(pairingAuthPath);
+
+    let state, saveCreds;
     try {
-      log.info(`🔐 [PAIRING] Initialisation pour ${userId} (${phoneNumber})`);
+      const authState = await useMultiFileAuthState(pairingAuthPath);
+      if (!authState?.state || !authState?.saveCreds) throw new Error('État d’authentification invalide');
+      state = authState.state;
+      saveCreds = authState.saveCreds;
 
-      // 1️⃣ Nettoyage avant toute tentative
-      await this.forceCleanupSessions(userId).catch(() => {});
-
-      // 2️⃣ Préparation du dossier de session
-      const pairingAuthPath = path.join(process.cwd(), this.sessionName);
-      await fs.ensureDir(pairingAuthPath);
-
-      let state, saveCreds;
-
-      try {
-        // tentative normale
-        const authState = await useMultiFileAuthState(pairingAuthPath);
-        if (!authState?.state || !authState?.saveCreds) {
-          throw new Error('État d’authentification invalide ou incomplet');
-        }
-        state = authState.state;
-        saveCreds = authState.saveCreds;
-
-        // si pas de creds, réinitialiser proprement
-        if (!state?.creds) {
-          log.warn(`⚠️ Aucun creds détecté, réinitialisation du dossier de session...`);
-          await fs.emptyDir(pairingAuthPath);
-          const newAuth = await useMultiFileAuthState(pairingAuthPath);
-          if (!newAuth?.state || !newAuth?.saveCreds) throw new Error('Impossible d’initialiser un nouvel état après nettoyage');
-          state = newAuth.state;
-          saveCreds = newAuth.saveCreds;
-        }
-      } catch (initErr) {
-        // tentative de récupération
-        log.error(`💣 Erreur initialisation auth state: ${initErr.message}`);
-        await fs.emptyDir(pairingAuthPath).catch(() => {});
-        const retryAuth = await useMultiFileAuthState(pairingAuthPath);
-        if (!retryAuth?.state || !retryAuth?.saveCreds) {
-          throw new Error('Impossible d’initialiser l’état d’authentification après erreur critique');
-        }
-        state = retryAuth.state;
-        saveCreds = retryAuth.saveCreds;
+      if (!state?.creds) {
+        log.warn(`⚠️ Aucun creds détecté, réinitialisation...`);
+        await fs.emptyDir(pairingAuthPath);
+        const newAuth = await useMultiFileAuthState(pairingAuthPath);
+        if (!newAuth?.state || !newAuth?.saveCreds) throw new Error('Échec réinitialisation auth');
+        state = newAuth.state;
+        saveCreds = newAuth.saveCreds;
       }
-
-      // Création du socket Baileys optimisé
-      const { version } = await fetchLatestBaileysVersion();
-      const sock = makeWASocket({
-        version,
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
-        },
-        printQRInTerminal: false,
-        generateHighQualityLinkPreview: false,
-        logger: pino({ level: "silent" }),
-        syncFullHistory: false,
-        browser: Browsers.ubuntu("Chrome"),
-        mobile: false ,
-        markOnlineOnConnect: false,
-        connectTimeoutMs: 360000,
-        defaultQueryTimeoutMs: 360000,
-        emitOwnEvents: true,
-        retryRequestDelayMs: 3000,
-        maxRetries: 3,
-        fireInitQueries: true,
-        msgRetryCounterCache: new Map(),
-        transactionOpts: { maxCommitRetries: 2, delayBeforeRetry: 1500 },
-        getMessage: async () => undefined,
-        shouldSyncHistoryMessage: () => false,
-        shouldIgnoreJid: (jid) => jid?.endsWith('@g.us') || jid?.endsWith('@broadcast')
-      });
-
-      sock.ev.on("creds.update",saveCreds);
-
-      this.store.bind(sock.ev);
-
-      let pairingCode = null;
-      let pairingSuccess = false;
-
-      // Génération du pairing code
-      try {
-        log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
-        await delay(7000);
-
-        const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
-
-        // vérifier la propriété de registered de façon sûre
-        const registered = !!sock?.authState?.creds?.registered;
-
-        if (!registered) {
-          pairingCode = await sock.requestPairingCode(cleanNumber);
-          if (!pairingCode) throw new Error("Aucun code retourné par WhatsApp");
-
-          // format esthétique
-          pairingCode = pairingCode.replace(/(.{4})/g, '$1-').replace(/-$/, '');
-          log.success(`✅ Code généré: ${pairingCode}`);
-
-          // Envoi du code via ton backend / pont
-          await this.sendPairingCodeViaHTTP(userId, pairingCode, cleanNumber).catch(e => log.warn('sendPairingCodeViaHTTP failed', e));
-          await this.sendMessageViaHTTP(userId,
-            `🔑 *Code de Pairing généré !*\n\n` +
-            `📱 Pour: ${cleanNumber}\n` +
-            `🧩 Code: *${pairingCode}*\n\n` +
-            `👉 Ouvrez WhatsApp > Paramètres > Appareils liés > Lier un appareil.\n` +
-            `Entrez le code immédiatement.\n\n` +
-            `⏱️ Valide 5 minutes.`).catch(() => {});
-        } else {
-          log.info('✅ Déjà enregistré, connexion directe');
-          pairingSuccess = true;
-        }
-      } catch (err) {
-        log.error(`❌ Erreur génération code: ${err?.message || err}`);
-        if (String(err?.message || '').includes('too many attempts')) {
-          throw new Error('Trop de tentatives. Attendez 10 min avant de réessayer.');
-        } else if (String(err?.message || '').includes('invalid')) {
-          throw new Error('Numéro de téléphone invalide.');
-        } else {
-          throw new Error('Service WhatsApp temporairement indisponible.');
-        }
-      }
-
-      // connection.update: gérer open/close/connecting
-      sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, isNewLogin } = update;
-        
-        const connectionInfo = { 
-          connection, 
-          hasQR: false,
-          isNewLogin,
-          error: lastDisconnect?.error?.message,
-          statusCode: lastDisconnect?.error?.output?.statusCode
-        };
-        
-        log.info(`🔌 [PAIRING] ${userId} - Connection update:`, connectionInfo);
-        try {
-          const { connection, lastDisconnect } = update;
-
-          switch (connection) {
-            case "open":
-              log.success(`🎉 Pairing réussi pour ${userId}`);
-              pairingSuccess = true;
-
-              // clear safety timeout if any
-              const t = this.connectionTimeouts.get(userId);
-              if (t) {
-                clearTimeout(t);
-                this.connectionTimeouts.delete(userId);
-              }
-
-              await this.handleSuccessfulPairing(sock, userId, userData, saveCreds, null).catch(e => log.error('handleSuccessfulPairing error', e));
-              break;
-
-            case "close":
-              if (!pairingSuccess) {
-                const reason = lastDisconnect?.error?.message || "Connexion fermée";
-                log.error(`❌ Pairing échoué: ${reason}`);
-                await this.sendMessageViaHTTP(userId,
-                  `❌ *Échec de connexion pairing*\n\n` +
-                  `Raison: ${reason}\n\n` +
-                  `💡 Réessayez avec la méthode *QR Code* ou vérifiez votre Internet.`).catch(() => {});
-                await this.cleanupPairing(userId);
-              }
-              break;
-
-            case "connecting":
-              log.info(`🔄 Connexion en cours pour ${userId}...`);
-              break;
-          }
-        } catch (e) {
-          log.error('connection.update handler error:', e);
-        }
-      });
-
-      // sauvegarde creds
-      sock.ev.on("creds.update", saveCreds);
-
-      // Safety timeout (3 minutes) — conserve la référence dans pairingTimeouts
-      const safetyTimeout = setTimeout(async () => {
-        if (!pairingSuccess) {
-          log.warn(`⏰ Timeout global du pairing pour ${userId}`);
-          await this.sendMessageViaHTTP(userId,
-            `⏰ *Le code n'a pas été utilisé à temps.*\n\n` +
-            `Veuillez relancer /connect et choisir *QR Code* (plus rapide).`).catch(() => {});
-          await this.cleanupPairing(userId);
-        }
-      }, 3 * 120 * 1000);
-
-      this.pairingTimeouts.set(userId, safetyTimeout);
-
-      // Storing active pairing
-      this.activePairings.set(userId, {
-        socket: sock,
-        userData,
-        phoneNumber,
-        pairingCode,
-        safetyTimeout,
-      });
-
-      return {
-        success: true,
-        method: "pairing",
-        pairingCode,
-        message: "Code pairing généré et (si possible) envoyé avec succès",
-      };
-
-    } catch (error) {
-      log.error(`💥 ERREUR CRITIQUE pairing: ${error?.message || error}`);
-      await this.cleanupPairing(userId).catch(() => {});
-      await this.sendMessageViaHTTP(userId,
-        `❌ *Erreur lors du pairing*\n\n${String(error?.message || error)}\n\n` +
-        `🎯 Essayez à nouveau ou utilisez la méthode *QR Code*.`).catch(() => {});
-      throw error;
+    } catch (err) {
+      log.error(`💣 Erreur auth state: ${err.message}`);
+      await fs.emptyDir(pairingAuthPath).catch(() => {});
+      const retryAuth = await useMultiFileAuthState(pairingAuthPath);
+      if (!retryAuth?.state || !retryAuth?.saveCreds) throw new Error('Échec récupération auth');
+      state = retryAuth.state;
+      saveCreds = retryAuth.saveCreds;
     }
+
+    const { version } = await fetchLatestBaileysVersion();
+    const sock = makeWASocket({
+      version,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+      },
+      printQRInTerminal: false,
+      logger: pino({ level: "silent" }),
+      browser: Browsers.ubuntu("Chrome"),
+      mobile: false,
+      markOnlineOnConnect: false,
+      emitOwnEvents: true,
+      syncFullHistory: false,
+      getMessage: async () => undefined,
+      shouldSyncHistoryMessage: () => false,
+      shouldIgnoreJid: jid => jid?.endsWith('@g.us') || jid?.endsWith('@broadcast')
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+    this.store.bind(sock.ev);
+
+    let pairingCode = null;
+    let pairingSuccess = false;
+
+    try {
+      log.info(`📱 Génération du code pairing pour ${phoneNumber}...`);
+      await delay(7000);
+      const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+
+      const registered = !!state?.creds?.registered;
+      if (!registered) {
+        pairingCode = await sock.requestPairingCode(cleanNumber);
+        if (!pairingCode) throw new Error("Aucun code retourné");
+
+        pairingCode = pairingCode.replace(/(.{4})/g, '$1-').replace(/-$/, '');
+        log.success(`✅ Code généré: ${pairingCode}`);
+
+        await this.sendPairingCodeViaHTTP(userId, pairingCode, cleanNumber).catch(e => log.warn('sendPairingCodeViaHTTP failed', e));
+        await this.sendMessageViaHTTP(userId,
+          `🔑 *Code de Pairing généré !*\n\n📱 Pour: ${cleanNumber}\n🧩 Code: *${pairingCode}*\n\n👉 Ouvrez WhatsApp > Paramètres > Appareils liés > Lier un appareil.\nEntrez le code immédiatement.\n\n⏱️ Valide 5 minutes.`).catch(() => {});
+      } else {
+        log.info('✅ Déjà enregistré, tentative de connexion directe');
+        pairingSuccess = true;
+      }
+    } catch (err) {
+      log.error(`❌ Erreur génération code: ${err.message}`);
+      if (err.message.includes('too many attempts')) throw new Error('Trop de tentatives. Attendez 10 min.');
+      if (err.message.includes('invalid')) throw new Error('Numéro invalide.');
+      throw new Error('Service WhatsApp indisponible.');
+    }
+
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update;
+      log.info(`🔌 [PAIRING] ${userId} - Connexion: ${connection}`);
+
+      if (connection === "open") {
+        log.success(`🎉 Pairing réussi pour ${userId}`);
+        pairingSuccess = true;
+
+        const t = this.connectionTimeouts.get(userId);
+        if (t) {
+          clearTimeout(t);
+          this.connectionTimeouts.delete(userId);
+        }
+
+        // 🔁 Redémarrage propre
+        sock.end(new Error("Restart after pairing"));
+        await delay(1500);
+
+        const { state: newState, saveCreds: newSaveCreds } = await useMultiFileAuthState(pairingAuthPath);
+        const newSock = makeWASocket({
+          version,
+          auth: {
+            creds: newState.creds,
+            keys: makeCacheableSignalKeyStore(newState.keys, pino({ level: "fatal" })),
+          },
+          printQRInTerminal: false,
+          logger: pino({ level: "silent" }),
+          browser: Browsers.ubuntu("Chrome"),
+          mobile: false,
+          markOnlineOnConnect: false,
+          emitOwnEvents: true,
+          syncFullHistory: false,
+        });
+
+        newSock.ev.on("creds.update", newSaveCreds);
+        this.store.bind(newSock.ev);
+
+        await this.handleSuccessfulPairing(newSock, userId, userData, newSaveCreds, null).catch(e => log.error('handleSuccessfulPairing error', e));
+      }
+
+      if (connection === "close" && !pairingSuccess) {
+        const reason = lastDisconnect?.error?.message || "Connexion fermée";
+        log.error(`❌ Pairing échoué: ${reason}`);
+        await this.sendMessageViaHTTP(userId,
+          `❌ *Échec de connexion pairing*\n\nRaison: ${reason}\n\n💡 Réessayez avec la méthode *QR Code* ou vérifiez votre Internet.`).catch(() => {});
+        await this.cleanupPairing(userId);
+      }
+
+      if (connection === "connecting") {
+        log.info(`🔄 Connexion en cours pour ${userId}...`);
+      }
+    });
+
+    const safetyTimeout = setTimeout(async () => {
+      if (!pairingSuccess) {
+        log.warn(`⏰ Timeout pairing pour ${userId}`);
+        await this.sendMessageViaHTTP(userId,
+          `⏰ *Le code n'a pas été utilisé à temps.*\n\nVeuillez relancer /connect et choisir *QR Code*.`).catch(() => {});
+        await this.cleanupPairing(userId);
+      }
+    }, 3 * 60 * 1000);
+
+    this.pairingTimeouts.set(userId, safetyTimeout);
+
+    this.activePairings.set(userId, {
+      socket: sock,
+      userData,
+      phoneNumber,
+      pairingCode,
+      safetyTimeout,
+    });
+
+    return {
+      success: true,
+      method: "pairing",
+      pairingCode,
+      message: "Code pairing généré et envoyé avec succès",
+    };
+
+  } catch (error) {
+    log.error(`💥 ERREUR CRITIQUE pairing: ${error.message}`);
+    await this.cleanupPairing(userId).catch(() => {});
+    await this.sendMessageViaHTTP(userId,
+      `❌ *Erreur lors du pairing*\n\n${error.message}\n\n🎯 Essayez à nouveau ou utilisez la méthode *QR Code*.`).catch(() => {});
+    throw error;
   }
+}
+
 
   /* ---------------------------
      Après pairing réussi: copie et création session

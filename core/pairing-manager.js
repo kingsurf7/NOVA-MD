@@ -347,6 +347,9 @@ class PairingManager {
       connectTimeoutMs: 240000,
         defaultQueryTimeoutMs: 180000,
       syncFullHistory: false,
+      retryRequestDelayMs: 3000,
+      maxRetries: 5, 
+      keepAliveIntervalMs: 60000,
       getMessage: async () => undefined,
       shouldSyncHistoryMessage: () => false,
       shouldIgnoreJid: jid => jid?.endsWith('@g.us') || jid?.endsWith('@broadcast')
